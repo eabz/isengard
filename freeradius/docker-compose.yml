@@ -1,0 +1,13 @@
+services:
+  freeradius:
+    build: .
+    container_name: freeradius
+    restart: unless-stopped
+    ports:
+      - "${HOST_BIND_IP}:1812:1812/udp"
+      - "${HOST_BIND_IP}:1813:1813/udp"
+    volumes:
+      - freeradius-logs:/var/log/freeradius
+
+volumes:
+  freeradius-logs:
