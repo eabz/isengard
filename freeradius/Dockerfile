@@ -1,6 +1,11 @@
 FROM freeradius/freeradius-server:latest
 
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends stunnel4 \
+	&& rm -rf /var/lib/apt/lists/*
+
 COPY raddb/ /etc/raddb/
+COPY stunnel/ /etc/stunnel/
 COPY docker-enable-google-ldap.sh /docker-enable-google-ldap.sh
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 

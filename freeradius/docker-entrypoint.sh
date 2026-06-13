@@ -1,7 +1,17 @@
 #!/bin/sh
 set -e
 
-RADDB=/etc/raddb
+# Official image may use /etc/freeradius or /etc/raddb depending on version.
+if [ -d /etc/freeradius/mods-available ]; then
+	RADDB=/etc/freeradius
+elif [ -d /etc/raddb/mods-available ]; then
+	RADDB=/etc/raddb
+else
+	echo "ERROR: Could not find FreeRADIUS config directory." >&2
+	exit 1
+fi
+
+export RADDB
 
 if [ "${GOOGLE_LDAP_ENABLED:-0}" != "1" ]; then
 	exec freeradius "$@"
@@ -23,4 +33,16 @@ if grep -q 'REPLACE_WITH_GOOGLE_LDAP_USERNAME' "${RADDB}/mods-available/ldap_goo
 fi
 
 /docker-enable-google-ldap.sh
+
+echo "Starting stunnel TLS proxy to ldap.google.com..."
+stunnel4 /etc/stunnel/google-ldap.conf &
+sleep 1
+
+if ! ss -ltn 2>/dev/null | grep -q ':1636'; then
+	if ! netstat -ltn 2>/dev/null | grep -q ':1636'; then
+		echo "ERROR: stunnel failed to listen on 127.0.0.1:1636." >&2
+		exit 1
+	fi
+fi
+
 exec freeradius "$@"

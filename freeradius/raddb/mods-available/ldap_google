@@ -1,5 +1,8 @@
 # Google Workspace Secure LDAP module for FreeRADIUS.
 #
+# TLS to Google is handled by stunnel (see stunnel/google-ldap.conf).
+# This avoids the GnuTLS/OpenSSL conflict in the official Docker image.
+#
 # Setup in Google Admin:
 #   Apps > LDAP > Add client > generate access credentials + download cert/key
 #   https://support.google.com/a/answer/9048434
@@ -7,12 +10,11 @@
 # Place certificate files in raddb/certs/google/:
 #   ldap-client.crt
 #   ldap-client.key
-#
-# Google LDAP does not return user passwords. Auth only works with plain-text
-# passwords: PAP, or EAP-TTLS with PAP inside the tunnel (see inner-tunnel-google).
 
 ldap ldap_google {
-	server = 'ldaps://ldap.google.com:636/'
+	# Local stunnel proxy (TLS + client cert) -> ldap.google.com:636
+	server = 'ldap://127.0.0.1'
+	port = 1636
 
 	# Access credentials from Google Admin (LDAP client > Generate access credentials)
 	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
@@ -51,12 +53,6 @@ ldap ldap_google {
 		idle = 60
 		probes = 3
 		interval = 3
-	}
-
-	tls {
-		certificate_file = ${certdir}/google/ldap-client.crt
-		private_key_file = ${certdir}/google/ldap-client.key
-		require_cert = 'allow'
 	}
 
 	pool {

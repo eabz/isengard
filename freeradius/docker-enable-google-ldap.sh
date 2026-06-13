@@ -1,7 +1,11 @@
 #!/bin/sh
 set -e
 
-RADDB=/etc/raddb
+RADDB="${RADDB:-/etc/raddb}"
+if [ ! -d "${RADDB}/mods-available" ] && [ -d /etc/freeradius/mods-available ]; then
+	RADDB=/etc/freeradius
+fi
+
 DEFAULT="${RADDB}/sites-available/default"
 EAP="${RADDB}/mods-available/eap"
 
@@ -10,7 +14,6 @@ rm -f "${RADDB}/sites-enabled/inner-tunnel"
 ln -sf ../sites-available/inner-tunnel-google "${RADDB}/sites-enabled/inner-tunnel"
 
 if ! grep -q 'ldap_google' "${DEFAULT}"; then
-	# PAP auth via Google LDAP in the default virtual server.
 	sed -i '/authorize {/,/^}/ {
 		/^[[:space:]]*pap[[:space:]]*$/i\
 \tif (&User-Password \&\& !control:Auth-Type) {\
@@ -28,7 +31,6 @@ if ! grep -q 'ldap_google' "${DEFAULT}"; then
 	}' "${DEFAULT}"
 fi
 
-# EAP-TTLS with PAP inner tunnel (required for Google LDAP + WiFi).
 if grep -q 'default_eap_type = mschapv2' "${EAP}"; then
 	sed -i 's/default_eap_type = mschapv2/default_eap_type = pap/' "${EAP}"
 fi
@@ -36,4 +38,4 @@ if grep -q 'default_eap_type = md5' "${EAP}"; then
 	sed -i 's/default_eap_type = md5/default_eap_type = ttls/' "${EAP}"
 fi
 
-echo "Google LDAP configuration enabled."
+echo "Google LDAP configuration enabled (via stunnel on 127.0.0.1:1636)."
