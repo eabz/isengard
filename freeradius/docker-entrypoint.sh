@@ -34,19 +34,6 @@ fi
 
 /docker-enable-google-ldap.sh
 
-GOOGLE_LDAP_CA=/etc/stunnel/google-ldap-ca.crt
-echo "Fetching Google LDAP server certificate..."
-if ! echo | openssl s_client \
-	-connect ldap.google.com:636 \
-	-servername ldap.google.com \
-	2>/dev/null \
-	| openssl x509 -out "${GOOGLE_LDAP_CA}.tmp"; then
-	echo "ERROR: Could not fetch Google LDAP server certificate." >&2
-	echo "  Check outbound network access to ldap.google.com:636." >&2
-	exit 1
-fi
-mv "${GOOGLE_LDAP_CA}.tmp" "${GOOGLE_LDAP_CA}"
-
 echo "Starting stunnel TLS proxy to ldap.google.com..."
 stunnel4 /etc/stunnel/google-ldap.conf &
 STUNNEL_PID=$!
