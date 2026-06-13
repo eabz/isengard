@@ -1,7 +1,5 @@
 # Inner tunnel for EAP-TTLS + PAP against Google Secure LDAP.
-# Replaces the default inner-tunnel when enabled via Dockerfile.
-#
-# WiFi clients must use EAP-TTLS with PAP (not PEAP/MS-CHAP).
+# WiFi clients and AP must use EAP-TTLS with PAP (not PEAP / MS-CHAP).
 
 server inner-tunnel {
 
@@ -13,9 +11,14 @@ server inner-tunnel {
 
 	authorize {
 		filter_username
-		google_ldap_strip_username
-		filter_inner_identity
 
+		if (&User-Name =~ /^([^@]+)@/) {
+			update request {
+				&Stripped-User-Name := "%{1}"
+			}
+		}
+
+		filter_inner_identity
 		suffix
 
 		update control {
@@ -26,15 +29,20 @@ server inner-tunnel {
 			ok = return
 		}
 
-		# Google LDAP: bind-as-user requires a plain-text password in the tunnel.
 		if (&User-Password && !control:Auth-Type) {
 			update control {
 				&Auth-Type := ldap
 			}
 		}
+
+		pap
 	}
 
 	authenticate {
+		Auth-Type PAP {
+			ldap_google
+		}
+
 		Auth-Type LDAP {
 			ldap_google
 		}

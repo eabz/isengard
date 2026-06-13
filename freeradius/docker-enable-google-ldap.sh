@@ -9,16 +9,22 @@ fi
 DEFAULT="${RADDB}/sites-available/default"
 EAP="${RADDB}/mods-available/eap"
 
+STRIP_MARKER="Google LDAP: strip @domain from username"
+EAP_MARKER="Google LDAP EAP patched"
+
 ln -sf ../mods-available/ldap_google "${RADDB}/mods-enabled/ldap_google"
 rm -f "${RADDB}/sites-enabled/inner-tunnel"
 ln -sf ../sites-available/inner-tunnel-google "${RADDB}/sites-enabled/inner-tunnel"
 
-if [ -f /etc/raddb/policy.d/google-ldap ] && [ -d "${RADDB}/policy.d" ] && [ "${RADDB}" != "/etc/raddb" ]; then
-	cp /etc/raddb/policy.d/google-ldap "${RADDB}/policy.d/google-ldap"
-fi
-
-if ! grep -q 'google_ldap_strip_username' "${DEFAULT}"; then
-	sed -i '/filter_username/a\	google_ldap_strip_username' "${DEFAULT}"
+if ! grep -q "${STRIP_MARKER}" "${DEFAULT}"; then
+	sed -i "/^[[:space:]]*suffix[[:space:]]*\$/i\\
+\t# ${STRIP_MARKER}\\
+\tif (\&User-Name =~ \\/^([^@]+)@\\/) {\\
+\t\tupdate request {\\
+\t\t\t\&Stripped-User-Name := \"%{1}\"\\
+\t\t}\\
+\t}\\
+" "${DEFAULT}"
 fi
 
 if ! grep -q 'ldap_google' "${DEFAULT}"; then
@@ -35,15 +41,23 @@ if ! grep -q 'ldap_google' "${DEFAULT}"; then
 		/^[[:space:]]*eap[[:space:]]*$/i\
 \tAuth-Type LDAP {\
 \t\tldap_google\
+\t}\
+\tAuth-Type PAP {\
+\t\tldap_google\
 \t}
 	}' "${DEFAULT}"
 fi
 
-if grep -q 'default_eap_type = mschapv2' "${EAP}"; then
-	sed -i 's/default_eap_type = mschapv2/default_eap_type = pap/' "${EAP}"
-fi
-if grep -q 'default_eap_type = md5' "${EAP}"; then
-	sed -i 's/default_eap_type = md5/default_eap_type = ttls/' "${EAP}"
+if ! grep -q "${EAP_MARKER}" "${EAP}"; then
+	# TTLS inner tunnel must use PAP for Google LDAP (MS-CHAP will always fail).
+	sed -i 's/default_eap_type = mschapv2/default_eap_type = pap/g' "${EAP}"
+	sed -i 's/default_eap_type = md5/default_eap_type = ttls/g' "${EAP}"
+
+	# Stop offering MS-CHAP inside the TTLS tunnel.
+	sed -i '/^[[:space:]]*mschapv2[[:space:]]*{/,/^[[:space:]]*}[[:space:]]*$/d' "${EAP}"
+	sed -i '/^[[:space:]]*mschap[[:space:]]*{/,/^[[:space:]]*}[[:space:]]*$/d' "${EAP}"
+
+	printf '\n# %s\n' "${EAP_MARKER}" >> "${EAP}"
 fi
 
 echo "Google LDAP configuration enabled (via stunnel on 127.0.0.1:1636)."
