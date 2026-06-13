@@ -30,7 +30,7 @@ services:
     networks:
       - koha
     volumes:
-      - koha-data:/var/lib/koha
+      - ./data/koha:/var/lib/koha
 
   db:
     image: mariadb:11
@@ -48,7 +48,7 @@ services:
       retries: 10
       start_period: 30s
     volumes:
-      - mariadb-data:/var/lib/mysql
+      - ./data/mariadb:/var/lib/mysql
     networks:
       - koha
 
@@ -84,7 +84,3 @@ services:
 networks:
   koha:
     driver: bridge
-
-volumes:
-  koha-data:
-  mariadb-data:
