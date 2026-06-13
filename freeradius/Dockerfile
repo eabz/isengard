@@ -1,7 +1,7 @@
 FROM freeradius/freeradius-server:latest
 
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends stunnel4 \
+	&& apt-get install -y --no-install-recommends stunnel4 ca-certificates openssl \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY raddb/ /etc/raddb/
