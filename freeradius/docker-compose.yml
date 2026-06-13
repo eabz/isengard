@@ -8,6 +8,7 @@ services:
       - "${HOST_BIND_IP}:1813:1813/udp"
     volumes:
       - freeradius-logs:/var/log/freeradius
+      - ./raddb/certs/google:/etc/raddb/certs/google:ro
 
 volumes:
   freeradius-logs:

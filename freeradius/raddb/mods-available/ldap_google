@@ -1,0 +1,72 @@
+# Google Workspace Secure LDAP module for FreeRADIUS.
+#
+# Setup in Google Admin:
+#   Apps > LDAP > Add client > generate access credentials + download cert/key
+#   https://support.google.com/a/answer/9048434
+#
+# Place certificate files in raddb/certs/google/:
+#   ldap-client.crt
+#   ldap-client.key
+#
+# Google LDAP does not return user passwords. Auth only works with plain-text
+# passwords: PAP, or EAP-TTLS with PAP inside the tunnel (see inner-tunnel-google).
+
+ldap ldap_google {
+	server = 'ldaps://ldap.google.com:636/'
+
+	# Access credentials from Google Admin (LDAP client > Generate access credentials)
+	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
+	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
+
+	# Your Google Workspace domain as DN, e.g. example.com -> dc=example,dc=com
+	base_dn = 'dc=example,dc=com'
+
+	update {
+		control: += 'radiusControlAttribute'
+		request: += 'radiusRequestAttribute'
+		reply: += 'radiusReplyAttribute'
+	}
+
+	user_dn = "LDAP-UserDn"
+
+	user {
+		base_dn = "ou=Users,${..base_dn}"
+		filter = "(uid=%{%{Stripped-User-Name}:-%{User-Name}})"
+		scope = 'sub'
+	}
+
+	group {
+		base_dn = "ou=Groups,${..base_dn}"
+		filter = '(objectClass=posixGroup)'
+		scope = 'sub'
+		name_attribute = cn
+		membership_attribute = 'memberOf'
+	}
+
+	options {
+		chase_referrals = no
+		res_timeout = 10
+		srv_timelimit = 3
+		net_timeout = 3
+		idle = 60
+		probes = 3
+		interval = 3
+	}
+
+	tls {
+		certificate_file = ${certdir}/google/ldap-client.crt
+		private_key_file = ${certdir}/google/ldap-client.key
+		require_cert = 'allow'
+	}
+
+	pool {
+		start = ${thread[pool].start_servers}
+		min = ${thread[pool].min_spare_servers}
+		max = ${thread[pool].max_servers}
+		spare = ${thread[pool].max_spare_servers}
+		uses = 0
+		retry_delay = 30
+		lifetime = 0
+		idle_timeout = 60
+	}
+}
