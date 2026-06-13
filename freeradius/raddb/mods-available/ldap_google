@@ -66,3 +66,4 @@ ldap ldap_google {
 		idle_timeout = 60
 	}
 }
+
