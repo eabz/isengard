@@ -33,8 +33,7 @@ ldap ldap_google {
 
 	user {
 		base_dn = "ou=Users,${..base_dn}"
-		# Match uid (username) or mail (full email address)
-		filter = "(|(uid=%{%{Stripped-User-Name}:-%{User-Name}})(mail=%{%{User-Name}}))"
+		filter = "(|(mail=%{User-Name})(uid=%{%{Stripped-User-Name}:-%{User-Name}}))"
 		scope = 'sub'
 	}
 
