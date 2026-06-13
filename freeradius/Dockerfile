@@ -9,10 +9,7 @@ COPY stunnel/ /etc/stunnel/
 COPY docker-enable-google-ldap.sh /docker-enable-google-ldap.sh
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 
-RUN if [ -d /etc/freeradius/policy.d ] && [ -d /etc/raddb/policy.d ]; then \
-	cp /etc/raddb/policy.d/google-ldap /etc/freeradius/policy.d/google-ldap; \
-	fi \
-	&& chmod +x /docker-enable-google-ldap.sh /docker-entrypoint.sh
+RUN chmod +x /docker-enable-google-ldap.sh /docker-entrypoint.sh
 
 EXPOSE 1812/udp 1813/udp
 
