@@ -17,6 +17,7 @@ services:
       - ./raddb/certs/google:/etc/raddb/certs/google:ro
       - ./raddb/mods-available/ldap_google:/etc/raddb/mods-available/ldap_google:ro
       - ./raddb/clients.conf:/etc/raddb/clients.conf:ro
+      - ./raddb/mods-config/files/authorize:/etc/raddb/mods-config/files/authorize:ro
 
 volumes:
   freeradius-logs:

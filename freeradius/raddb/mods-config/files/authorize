@@ -1,3 +1,2 @@
-# Example users — not used when Google LDAP is enabled.
-# testing Cleartext-Password := "password"
-#     Reply-Message = "Hello, %{User-Name}"
+testing Cleartext-Password := "password"
+    Reply-Message = "Hello, %{User-Name}"
