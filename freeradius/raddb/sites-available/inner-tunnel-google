@@ -13,6 +13,7 @@ server inner-tunnel {
 
 	authorize {
 		filter_username
+		google_ldap_strip_username
 		filter_inner_identity
 
 		suffix

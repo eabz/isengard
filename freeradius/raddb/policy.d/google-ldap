@@ -1,0 +1,9 @@
+# Strip @domain from email-style logins before Google LDAP lookup.
+# Google uid is "eberrueta", not "eberrueta@cedrosnorte.edu.mx".
+google_ldap_strip_username {
+	if (&User-Name =~ /^([^@]+)@/) {
+		update request {
+			&Stripped-User-Name := "%{1}"
+		}
+	}
+}

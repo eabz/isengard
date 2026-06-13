@@ -13,6 +13,14 @@ ln -sf ../mods-available/ldap_google "${RADDB}/mods-enabled/ldap_google"
 rm -f "${RADDB}/sites-enabled/inner-tunnel"
 ln -sf ../sites-available/inner-tunnel-google "${RADDB}/sites-enabled/inner-tunnel"
 
+if [ -f /etc/raddb/policy.d/google-ldap ] && [ -d "${RADDB}/policy.d" ] && [ "${RADDB}" != "/etc/raddb" ]; then
+	cp /etc/raddb/policy.d/google-ldap "${RADDB}/policy.d/google-ldap"
+fi
+
+if ! grep -q 'google_ldap_strip_username' "${DEFAULT}"; then
+	sed -i '/filter_username/a\	google_ldap_strip_username' "${DEFAULT}"
+fi
+
 if ! grep -q 'ldap_google' "${DEFAULT}"; then
 	sed -i '/authorize {/,/^}/ {
 		/^[[:space:]]*pap[[:space:]]*$/i\
