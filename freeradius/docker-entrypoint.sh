@@ -36,13 +36,13 @@ fi
 
 echo "Starting stunnel TLS proxy to ldap.google.com..."
 stunnel4 /etc/stunnel/google-ldap.conf &
-sleep 1
+STUNNEL_PID=$!
+sleep 2
 
-if ! ss -ltn 2>/dev/null | grep -q ':1636'; then
-	if ! netstat -ltn 2>/dev/null | grep -q ':1636'; then
-		echo "ERROR: stunnel failed to listen on 127.0.0.1:1636." >&2
-		exit 1
-	fi
+if ! kill -0 "${STUNNEL_PID}" 2>/dev/null; then
+	echo "ERROR: stunnel exited unexpectedly." >&2
+	exit 1
 fi
 
+echo "stunnel running (pid ${STUNNEL_PID}) on 127.0.0.1:1636"
 exec freeradius "$@"
