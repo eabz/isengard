@@ -3,12 +3,14 @@ services:
     image: teogramm/koha:${KOHA_VERSION:-24.11}
     container_name: koha
     restart: unless-stopped
+    env_file:
+      - .env
     cap_add:
       - DAC_READ_SEARCH
       - SYS_NICE
     depends_on:
       db:
-        condition: service_started
+        condition: service_healthy
       rabbitmq:
         condition: service_started
       memcached:
@@ -23,6 +25,8 @@ services:
     ports:
       - "${HOST_BIND_IP}:8080:8080"   # OPAC
       - "${HOST_BIND_IP}:8081:8081"   # Staff interface
+      - "127.0.0.1:8080:8080"         # local testing from the host
+      - "127.0.0.1:8081:8081"
     networks:
       - koha
     volumes:
@@ -37,6 +41,12 @@ services:
       MARIADB_DATABASE: ${KOHA_DB_NAME}
       MARIADB_USER: ${KOHA_DB_USER}
       MARIADB_PASSWORD: ${KOHA_DB_PASSWORD}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     volumes:
       - mariadb-data:/var/lib/mysql
     networks:
