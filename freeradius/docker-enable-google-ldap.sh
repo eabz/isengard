@@ -11,19 +11,29 @@ ln -sf ../sites-available/inner-tunnel-google "${RADDB}/sites-enabled/inner-tunn
 
 if ! grep -q 'ldap_google' "${DEFAULT}"; then
 	# PAP auth via Google LDAP in the default virtual server.
-	sed -i '/^[[:space:]]*pap[[:space:]]*$/i\
+	sed -i '/authorize {/,/^}/ {
+		/^[[:space:]]*pap[[:space:]]*$/i\
 \tif (&User-Password \&\& !control:Auth-Type) {\
 \t\tupdate control {\
 \t\t\t\&Auth-Type := ldap\
 \t\t}\
-\t}' "${DEFAULT}"
+\t}
+	}' "${DEFAULT}"
 
-	sed -i '/^[[:space:]]*eap[[:space:]]*$/i\
+	sed -i '/authenticate {/,/^}/ {
+		/^[[:space:]]*eap[[:space:]]*$/i\
 \tAuth-Type LDAP {\
 \t\tldap_google\
-\t}' "${DEFAULT}"
+\t}
+	}' "${DEFAULT}"
 fi
 
 # EAP-TTLS with PAP inner tunnel (required for Google LDAP + WiFi).
-sed -i 's/default_eap_type = mschapv2/default_eap_type = pap/' "${EAP}"
-sed -i 's/default_eap_type = md5/default_eap_type = ttls/' "${EAP}"
+if grep -q 'default_eap_type = mschapv2' "${EAP}"; then
+	sed -i 's/default_eap_type = mschapv2/default_eap_type = pap/' "${EAP}"
+fi
+if grep -q 'default_eap_type = md5' "${EAP}"; then
+	sed -i 's/default_eap_type = md5/default_eap_type = ttls/' "${EAP}"
+fi
+
+echo "Google LDAP configuration enabled."

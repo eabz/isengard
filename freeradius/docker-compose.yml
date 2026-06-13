@@ -3,12 +3,18 @@ services:
     build: .
     container_name: freeradius
     restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      GOOGLE_LDAP_ENABLED: ${GOOGLE_LDAP_ENABLED:-0}
     ports:
       - "${HOST_BIND_IP}:1812:1812/udp"
       - "${HOST_BIND_IP}:1813:1813/udp"
     volumes:
       - freeradius-logs:/var/log/freeradius
       - ./raddb/certs/google:/etc/raddb/certs/google:ro
+      - ./raddb/mods-available/ldap_google:/etc/raddb/mods-available/ldap_google:ro
+      - ./raddb/clients.conf:/etc/raddb/clients.conf:ro
 
 volumes:
   freeradius-logs:
