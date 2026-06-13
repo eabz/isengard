@@ -48,16 +48,30 @@ if ! grep -q 'ldap_google' "${DEFAULT}"; then
 	}' "${DEFAULT}"
 fi
 
-if ! grep -q "${EAP_MARKER}" "${EAP}"; then
-	# TTLS inner tunnel must use PAP for Google LDAP (MS-CHAP will always fail).
-	sed -i 's/default_eap_type = mschapv2/default_eap_type = pap/g' "${EAP}"
-	sed -i 's/default_eap_type = md5/default_eap_type = ttls/g' "${EAP}"
-
-	# Stop offering MS-CHAP inside the TTLS tunnel.
-	sed -i '/^[[:space:]]*mschapv2[[:space:]]*{/,/^[[:space:]]*}[[:space:]]*$/d' "${EAP}"
-	sed -i '/^[[:space:]]*mschap[[:space:]]*{/,/^[[:space:]]*}[[:space:]]*$/d' "${EAP}"
-
-	printf '\n# %s\n' "${EAP_MARKER}" >> "${EAP}"
-fi
+# Patch EAP on every start (idempotent):
+#   outer default = ttls
+#   inner ttls default = gtc (plain password via User-Password → Google LDAP)
+#   remove mschap/mschapv2 inner negotiation
+awk '
+	BEGIN { in_eap=0; in_ttls=0; outer_done=0; skip=0 }
+	/^[[:space:]]*eap[[:space:]]*\{/ { in_eap=1 }
+	in_eap && /^[[:space:]]*default_eap_type/ && !outer_done {
+		sub(/default_eap_type = .*/, "default_eap_type = ttls")
+		outer_done=1
+		in_eap=0
+	}
+	/^[[:space:]]*ttls[[:space:]]*\{/ { in_ttls=1 }
+	in_ttls && /^[[:space:]]*default_eap_type/ {
+		sub(/default_eap_type = .*/, "default_eap_type = gtc")
+		in_ttls=0
+	}
+	/^[[:space:]]*mschapv2[[:space:]]*\{/ { skip=1; next }
+	/^[[:space:]]*mschap[[:space:]]*\{/ { skip=1; next }
+	skip && /^[[:space:]]*\}[[:space:]]*$/ { skip=0; next }
+	skip { next }
+	{ print }
+' "${EAP}" > "${EAP}.google-ldap.tmp"
+mv "${EAP}.google-ldap.tmp" "${EAP}"
+grep -q "${EAP_MARKER}" "${EAP}" || printf '\n# %s\n' "${EAP_MARKER}" >> "${EAP}"
 
 echo "Google LDAP configuration enabled (via stunnel on 127.0.0.1:1636)."
