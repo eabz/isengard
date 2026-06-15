@@ -1,8 +1,7 @@
 # Google Workspace Secure LDAP module for FreeRADIUS.
 #
-# TLS to Google is handled by stunnel (see stunnel/google-ldap.conf).
-# Google Secure LDAP does NOT handle complex OR filters reliably — use
-# ldap_find_* modules in inner-tunnel authorize (one simple filter each).
+# Google Secure LDAP does NOT handle OR filters — use ldap_find_* in authorize.
+# Google rejects password bind by DN for secondary-domain users; bind with mail.
 
 ldap ldap_google {
 	server = 'ldap://127.0.0.1'
@@ -13,19 +12,8 @@ ldap ldap_google {
 
 	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
 
-	update {
-		control: += 'radiusControlAttribute'
-		request: += 'radiusRequestAttribute'
-		reply: += 'radiusReplyAttribute'
-	}
-
+	# Set by ldap_find_* in authorize; authenticate binds as this mail address.
 	user_dn = "LDAP-UserDn"
-
-	user {
-		base_dn = "${..base_dn}"
-		filter = "(uid=%{User-Name})"
-		scope = 'sub'
-	}
 
 	group {
 		base_dn = "ou=Groups,${..base_dn}"
@@ -71,6 +59,9 @@ ldap ldap_find_cedros {
 		filter = "(mail=%{User-Name}@cedrosnorte.edu.mx)"
 		scope = 'sub'
 	}
+	update {
+		control:LDAP-UserDn := &reply:mail
+	}
 }
 
 ldap ldap_find_colegios {
@@ -85,6 +76,9 @@ ldap ldap_find_colegios {
 		filter = "(mail=%{User-Name}@colegios-cedros-paseo.mx)"
 		scope = 'sub'
 	}
+	update {
+		control:LDAP-UserDn := &reply:mail
+	}
 }
 
 ldap ldap_find_uid {
@@ -98,5 +92,8 @@ ldap ldap_find_uid {
 		base_dn = "${..base_dn}"
 		filter = "(uid=%{User-Name})"
 		scope = 'sub'
+	}
+	update {
+		control:LDAP-UserDn := &reply:mail
 	}
 }
