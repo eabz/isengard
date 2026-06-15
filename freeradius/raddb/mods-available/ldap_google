@@ -1,97 +1,50 @@
 # Google Workspace Secure LDAP module for FreeRADIUS.
 #
-# cedrosnorte.edu.mx: ldap_google finds users by uid at authenticate.
-# colegios-cedros-paseo.mx: ldap_find_colegios (authorize) + ldap_colegios_bind (authenticate).
+# One module, one search. cedrosnorte.edu.mx (primary) and colegios-cedros-paseo.mx
+# (secondary) live in the SAME directory tree, so a single uid search finds users
+# from either domain. Authentication is "bind as user" (Google never returns the
+# password hash), which is why WiFi must use EAP-TTLS + PAP.
+#
+# TLS to ldap.google.com:636 is handled by stunnel on 127.0.0.1:1636
+# (avoids the GnuTLS/OpenSSL conflict in the official image).
 
 ldap ldap_google {
 	server = 'ldap://127.0.0.1'
 	port = 1636
 
+	# Access credentials: Google Admin > Apps > LDAP > client > access credentials.
 	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
 	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
 
+	# Primary domain only. Secondary-domain users are in the same tree.
 	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
 
+	# After the search below, rlm_ldap stores the found DN here and binds as it.
 	user_dn = "LDAP-UserDn"
 
 	user {
-		base_dn = "ou=Users,${..base_dn}"
+		# Search the whole tree so users in any OU (Personal, Servicios, ...) match.
+		base_dn = "${..base_dn}"
 		filter = "(uid=%{%{Stripped-User-Name}:-%{User-Name}})"
 		scope = 'sub'
 	}
 
 	options {
 		chase_referrals = no
+		net_timeout = 3
 		res_timeout = 10
 		srv_timelimit = 3
-		net_timeout = 3
 		idle = 60
 		probes = 3
 		interval = 3
 	}
 
+	# Modest pool: enough for a school, small enough not to flood stunnel/Google.
 	pool {
-		start = 1
-		min = 0
-		max = 2
-		spare = 1
-		uses = 0
-		retry_delay = 30
-		lifetime = 0
-		idle_timeout = 60
-	}
-}
-
-# Authorize-only: find colegios user by mail (Google OR filters do not work).
-ldap ldap_find_colegios {
-	server = 'ldap://127.0.0.1'
-	port = 1636
-	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
-	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
-	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
-	user_dn = "Ldap-UserDn"
-	user {
-		base_dn = "${..base_dn}"
-		filter = "(mail=%{%{Stripped-User-Name}:-%{User-Name}}@colegios-cedros-paseo.mx)"
-		scope = 'sub'
-	}
-	options {
-		chase_referrals = no
-		res_timeout = 10
-		srv_timelimit = 3
-		net_timeout = 3
-	}
-	pool {
-		start = 1
-		min = 0
-		max = 2
-		spare = 1
-		uses = 0
-		retry_delay = 30
-		lifetime = 0
-		idle_timeout = 60
-	}
-}
-
-# Authenticate-only: mail bind for colegios (no user {} — avoids DN overwrite).
-ldap ldap_colegios_bind {
-	server = 'ldap://127.0.0.1'
-	port = 1636
-	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
-	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
-	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
-	user_dn = "LDAP-UserDn"
-	options {
-		chase_referrals = no
-		res_timeout = 10
-		srv_timelimit = 3
-		net_timeout = 3
-	}
-	pool {
-		start = 1
-		min = 0
-		max = 2
-		spare = 1
+		start = 3
+		min = 1
+		max = 10
+		spare = 3
 		uses = 0
 		retry_delay = 30
 		lifetime = 0

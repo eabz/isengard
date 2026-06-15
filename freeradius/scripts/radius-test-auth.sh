@@ -1,7 +1,13 @@
 #!/bin/sh
-# Test inner-tunnel LDAP auth (direct to :18120, not full EAP-TTLS).
-# WiFi uses EAP-TTLS on :1812; cedros users may pass WiFi while this test rejects.
-# Usage: LDAP_TEST_PASSWORD='pass' ./scripts/radius-test-auth.sh eberrueta
+# Test the FreeRADIUS LDAP auth path through the inner-tunnel (PAP on :18120).
+# This exercises the same authorize/authenticate logic WiFi uses inside the
+# EAP-TTLS tunnel, without needing an EAP supplicant. (Full WiFi = the phone.)
+#
+# Runs from inside the container, so the request comes from 127.0.0.1
+# (client localhost, secret testing123).
+#
+# Usage:
+#   LDAP_TEST_PASSWORD='pass' ./scripts/radius-test-auth.sh eberrueta
 set -e
 
 USER="$(echo "${1:?usage: $0 <username>}" | tr '[:upper:]' '[:lower:]')"
@@ -19,79 +25,43 @@ if ! docker inspect -f '{{.State.Running}}' freeradius 2>/dev/null | grep -q tru
 	exit 1
 fi
 
-RADCLIENT="$(docker exec freeradius sh -c 'command -v radclient' 2>/dev/null || true)"
-if [ -z "${RADCLIENT}" ]; then
-	echo "ERROR: radclient not in container. Rebuild: docker compose up -d --build" >&2
-	exit 1
-fi
-
-echo "=== FreeRADIUS inner-tunnel auth test: ${USER} ==="
-echo "radclient: ${RADCLIENT}"
-echo "Path: docker exec → 127.0.0.1:18120 (client localhost in clients.conf)"
+echo "=== inner-tunnel auth test: ${USER} ==="
+echo "Path: docker exec -> 127.0.0.1:18120 (PAP)"
 
 PASS_B64="$(printf '%s' "${LDAP_TEST_PASSWORD}" | base64 | tr -d '\n')"
 
 OUT="$(docker exec \
 	-e "RADIUS_USER=${USER}" \
 	-e "RADIUS_PASS_B64=${PASS_B64}" \
-	freeradius sh -ec "
-pass=\$(printf '%s' \"\$RADIUS_PASS_B64\" | base64 -d)
-user=\$(printf '%s' \"\$RADIUS_USER\" | sed 's/\"/\\\\\"/g')
-pass=\$(printf '%s' \"\$pass\" | sed 's/\"/\\\\\"/g')
-printf 'User-Name = %s\nUser-Password = \"%s\"\n' \"\$user\" \"\$pass\" > /tmp/radtest.txt
-echo '--- radclient request ---'
-cat /tmp/radtest.txt
-echo '--- radclient response ---'
+	freeradius sh -ec '
+pass=$(printf "%s" "$RADIUS_PASS_B64" | base64 -d)
+user=$(printf "%s" "$RADIUS_USER" | sed "s/\"/\\\\\"/g")
+pass=$(printf "%s" "$pass" | sed "s/\"/\\\\\"/g")
+printf "User-Name = %s\nUser-Password = \"%s\"\n" "$user" "$pass" > /tmp/radtest.txt
+echo "--- request ---"; cat /tmp/radtest.txt
+echo "--- response ---"
 radclient -x 127.0.0.1:18120 auth testing123 -f /tmp/radtest.txt 2>&1
-RC=\$?
+rc=$?
 rm -f /tmp/radtest.txt
-exit \$RC
-" 2>&1)" || RC=$?
+exit $rc
+' 2>&1)" || true
 
-RC="${RC:-0}"
 echo "${OUT}"
 
-if [ -z "${OUT}" ]; then
+if echo "${OUT}" | grep -q 'Received Access-Accept'; then
 	echo ""
-	echo "ERROR: empty output from radclient (exit ${RC})."
-	echo "  docker compose up -d --build"
+	echo "OK: FreeRADIUS accepted (Google LDAP path works for ${USER})."
+	exit 0
+fi
+
+if echo "${OUT}" | grep -qiE 'No reply from server|Connection refused'; then
+	echo ""
+	echo "ERROR: no reply on :18120. Check the container is healthy:"
 	echo "  docker logs freeradius --tail 50"
 	exit 1
 fi
 
-if echo "${OUT}" | grep -q 'Received Access-Accept'; then
-	echo ""
-	echo "OK: FreeRADIUS accepted (WiFi LDAP path works)."
-	exit 0
-fi
-
-if echo "${OUT}" | grep -qE 'Received Access-Reject|Expected Access-Accept got Access-Reject'; then
-	echo ""
-	echo "FAIL: FreeRADIUS rejected."
-	echo "  Colegios users: ./scripts/ldap-test-bind.sh ${USER}"
-	echo "  Note: cedros WiFi can work even when this inner-tunnel test fails."
-	exit 1
-fi
-
-if echo "${OUT}" | grep -qiE 'No reply from server|Connection refused|timed out'; then
-	echo ""
-	echo "ERROR: no RADIUS reply on 127.0.0.1:18120."
-	echo "  docker exec uses source 127.0.0.1 → needs client localhost (secret testing123)."
-	echo "  Tests from the host use client docker_bridge (172.16.0.0/12)."
-	echo "  docker compose restart freeradius   # reload clients.conf"
-	echo "  docker logs freeradius --tail 30 | grep -i unknown"
-	exit 1
-fi
-
-if [ "${RC}" = 137 ] || echo "${OUT}" | grep -qiE 'OCI runtime|container.*restarting|connection reset'; then
-	echo ""
-	echo "ERROR: container crashed or restarted during test (exit ${RC})."
-	echo "  docker logs freeradius --tail 80"
-	echo "  If logs show many stunnel connections then 'exited with code 1', LDAP pools were too large."
-	exit 1
-fi
-
 echo ""
-echo "FAIL: FreeRADIUS auth failed (exit ${RC})."
-echo "Check output above; try: ./scripts/ldap-test-bind.sh ${USER}"
+echo "FAIL: FreeRADIUS rejected ${USER}."
+echo "  Verify the LDAP side directly: ./scripts/ldap-test.sh ${USER}"
 exit 1

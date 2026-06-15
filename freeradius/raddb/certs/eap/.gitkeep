@@ -1,0 +1,4 @@
+# EAP server certificate lives here at runtime:
+#   server.pem  server.key  ca.pem
+# Generated automatically (self-signed) or via scripts/issue-eap-cert.sh.
+# The actual cert/key files are gitignored.

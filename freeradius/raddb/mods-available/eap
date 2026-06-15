@@ -1,0 +1,55 @@
+# EAP for WPA2/WPA3 Enterprise against Google Secure LDAP.
+#
+# Outer method: EAP-TTLS. Inner method: PAP (Google LDAP needs the cleartext
+# password to bind as the user). PEAP/MS-CHAP are intentionally NOT offered —
+# they cannot work with Google LDAP.
+#
+# Server certificate lives in certs/eap/ (server.pem + server.key + ca.pem).
+# Use a public (Let's Encrypt) cert so phones validate it with no manual CA
+# install — see scripts/issue-eap-cert.sh. A self-signed cert is generated on
+# first start as a fallback (scripts/gen-eap-cert.sh).
+
+eap {
+	default_eap_type = ttls
+	timer_expire = 60
+	ignore_unknown_eap_types = no
+	cisco_accounting_username_bug = no
+	max_sessions = 4096
+
+	tls-config tls-common {
+		certificate_file = /etc/raddb/certs/eap/server.pem
+		private_key_file = /etc/raddb/certs/eap/server.key
+		ca_file = /etc/raddb/certs/eap/ca.pem
+
+		fragment_size = 1024
+		include_length = yes
+
+		# Force modern TLS; phones and laptops all support 1.2.
+		tls_min_version = "1.2"
+		tls_max_version = "1.2"
+
+		# Session resumption: lets devices reconnect without a full handshake
+		# (and without re-hitting LDAP), so long reauth windows stay cheap.
+		cache {
+			enable = yes
+			lifetime = 24    # hours
+		}
+
+		verify {
+		}
+	}
+
+	# Bare EAP-TLS (not used for WiFi here, but required so tls-common loads).
+	tls {
+		tls = tls-common
+	}
+
+	# EAP-TTLS: TLS tunnel, inner PAP handled by the inner-tunnel virtual server.
+	ttls {
+		tls = tls-common
+		default_eap_type = gtc
+		copy_request_to_tunnel = yes
+		use_tunneled_reply = no
+		virtual_server = "inner-tunnel"
+	}
+}

@@ -1,0 +1,12 @@
+# Secrets — never commit
+.env
+acme/
+
+# Google Secure LDAP client cert
+raddb/certs/google/*.crt
+raddb/certs/google/*.key
+
+# EAP server cert (generated or issued)
+raddb/certs/eap/*.pem
+raddb/certs/eap/*.key
+raddb/certs/eap/*.srl

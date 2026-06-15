@@ -6,7 +6,8 @@ services:
     env_file:
       - .env
     environment:
-      GOOGLE_LDAP_ENABLED: ${GOOGLE_LDAP_ENABLED:-0}
+      # CN/SAN for the EAP server cert (the "Domain" users enter on Android).
+      RADIUS_HOSTNAME: ${RADIUS_HOSTNAME:-radius.cedrosnorte.edu.mx}
     ports:
       - "${HOST_BIND_IP}:1812:1812/udp"
       - "${HOST_BIND_IP}:1813:1813/udp"
@@ -14,17 +15,27 @@ services:
       - "127.0.0.1:1813:1813/udp"
     volumes:
       - freeradius-logs:/var/log/freeradius
+
+      # Google Secure LDAP client cert (read-only).
       - ./raddb/certs/google:/etc/raddb/certs/google:ro
       - ./raddb/certs/google:/etc/freeradius/certs/google:ro
+
+      # EAP server cert (read-write: self-signed is generated here on first run,
+      # or drop a Let's Encrypt cert in via scripts/issue-eap-cert.sh).
+      - ./raddb/certs/eap:/etc/raddb/certs/eap
+      - ./raddb/certs/eap:/etc/freeradius/certs/eap
+
+      # Our config (mounted at the stock names the enabled symlinks point to).
       - ./raddb/mods-available/ldap_google:/etc/raddb/mods-available/ldap_google:ro
       - ./raddb/mods-available/ldap_google:/etc/freeradius/mods-available/ldap_google:ro
+      - ./raddb/mods-available/eap:/etc/raddb/mods-available/eap:ro
+      - ./raddb/mods-available/eap:/etc/freeradius/mods-available/eap:ro
+      - ./raddb/sites-available/default:/etc/raddb/sites-available/default:ro
+      - ./raddb/sites-available/default:/etc/freeradius/sites-available/default:ro
+      - ./raddb/sites-available/inner-tunnel:/etc/raddb/sites-available/inner-tunnel:ro
+      - ./raddb/sites-available/inner-tunnel:/etc/freeradius/sites-available/inner-tunnel:ro
       - ./raddb/clients.conf:/etc/raddb/clients.conf:ro
       - ./raddb/clients.conf:/etc/freeradius/clients.conf:ro
-      - ./raddb/mods-config/files/authorize:/etc/raddb/mods-config/files/authorize:ro
-      - ./raddb/sites-available/inner-tunnel-google:/etc/raddb/sites-available/inner-tunnel-google:ro
-      - ./raddb/sites-available/inner-tunnel-google:/etc/freeradius/sites-available/inner-tunnel-google:ro
-      - ./raddb/policy.d/google-ldap:/etc/raddb/policy.d/google-ldap:ro
-      - ./raddb/policy.d/google-ldap:/etc/freeradius/policy.d/google-ldap:ro
 
 volumes:
   freeradius-logs:

@@ -1,0 +1,66 @@
+# Outer server: what the access points talk to (RADIUS auth/acct on 1812/1813).
+#
+# Everything is EAP-TTLS. The TLS tunnel and inner PAP are handed to the
+# inner-tunnel virtual server, which does the Google LDAP lookup + bind.
+
+server default {
+
+	listen {
+		type = auth
+		ipaddr = *
+		port = 0
+		limit {
+			max_connections = 16
+			lifetime = 0
+			idle_timeout = 30
+		}
+	}
+
+	listen {
+		type = acct
+		ipaddr = *
+		port = 0
+	}
+
+	authorize {
+		filter_username
+		preprocess
+
+		# Start / continue the EAP conversation.
+		eap {
+			ok = return
+		}
+	}
+
+	authenticate {
+		Auth-Type eap {
+			eap
+		}
+	}
+
+	preacct {
+		preprocess
+		acct_unique
+	}
+
+	accounting {
+		detail
+	}
+
+	session {
+	}
+
+	post-auth {
+		# Long time between full reauthentications, with seamless in-place reauth.
+		# Raise 86400 (24h) if you want even longer; pair with the EAP TLS cache.
+		update reply {
+			&Session-Timeout := 86400
+			&Termination-Action := RADIUS-Request
+		}
+
+		Post-Auth-Type REJECT {
+			eap
+			attr_filter.access_reject
+		}
+	}
+}
