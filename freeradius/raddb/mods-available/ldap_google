@@ -1,27 +1,16 @@
 # Google Workspace Secure LDAP module for FreeRADIUS.
 #
 # TLS to Google is handled by stunnel (see stunnel/google-ldap.conf).
-# This avoids the GnuTLS/OpenSSL conflict in the official Docker image.
-#
-# Setup in Google Admin:
-#   Apps > LDAP > Add client > generate access credentials + download cert/key
-#   https://support.google.com/a/answer/9048434
-#
-# Place certificate files in raddb/certs/google/:
-#   ldap-client.crt
-#   ldap-client.key
+# Google Secure LDAP does NOT handle complex OR filters reliably — use
+# ldap_find_* modules in inner-tunnel authorize (one simple filter each).
 
 ldap ldap_google {
-	# Local stunnel proxy (TLS + client cert) -> ldap.google.com:636
 	server = 'ldap://127.0.0.1'
 	port = 1636
 
-	# Access credentials from Google Admin (LDAP client > Generate access credentials)
 	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
 	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
 
-	# Primary Google Workspace domain as DN.
-	# cedrosnorte.edu.mx -> dc=cedrosnorte,dc=edu,dc=mx
 	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
 
 	update {
@@ -33,10 +22,8 @@ ldap ldap_google {
 	user_dn = "LDAP-UserDn"
 
 	user {
-		# Search entire domain tree (colegios users may live outside ou=Users).
 		base_dn = "${..base_dn}"
-		# uid is unique org-wide; mail covers primary domain + secondary domains.
-		filter = "(|(uid=%{User-Name})(mail=%{User-Name}@cedrosnorte.edu.mx)(mail=%{User-Name}@colegios-cedros-paseo.mx)(mail=%{User-Name}@babycedros.edu.mx)(mail=%{User-Name}@piccolobambino.edu.mx)(mail=%{User-Name}@cedrosnortekindergarten.edu.mx))"
+		filter = "(uid=%{User-Name})"
 		scope = 'sub'
 	}
 
@@ -70,3 +57,46 @@ ldap ldap_google {
 	}
 }
 
+# --- Authorize-only lookups (simple filters; stop on first match) ---
+
+ldap ldap_find_cedros {
+	server = 'ldap://127.0.0.1'
+	port = 1636
+	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
+	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
+	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
+	user_dn = "LDAP-UserDn"
+	user {
+		base_dn = "${..base_dn}"
+		filter = "(mail=%{User-Name}@cedrosnorte.edu.mx)"
+		scope = 'sub'
+	}
+}
+
+ldap ldap_find_colegios {
+	server = 'ldap://127.0.0.1'
+	port = 1636
+	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
+	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
+	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
+	user_dn = "LDAP-UserDn"
+	user {
+		base_dn = "${..base_dn}"
+		filter = "(mail=%{User-Name}@colegios-cedros-paseo.mx)"
+		scope = 'sub'
+	}
+}
+
+ldap ldap_find_uid {
+	server = 'ldap://127.0.0.1'
+	port = 1636
+	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
+	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
+	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
+	user_dn = "LDAP-UserDn"
+	user {
+		base_dn = "${..base_dn}"
+		filter = "(uid=%{User-Name})"
+		scope = 'sub'
+	}
+}

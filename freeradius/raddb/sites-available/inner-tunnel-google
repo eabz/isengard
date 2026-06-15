@@ -28,6 +28,17 @@ server inner-tunnel {
 
 		# Do not run suffix here; username is already normalized above.
 
+		# Google LDAP: one simple filter per domain (OR filters fail on ldap.google.com).
+		ldap_find_cedros {
+			ok = return
+		}
+		ldap_find_colegios {
+			ok = return
+		}
+		ldap_find_uid {
+			ok = return
+		}
+
 		update control {
 			&Proxy-To-Realm := LOCAL
 		}
