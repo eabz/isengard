@@ -37,6 +37,10 @@ rm -f /tmp/radtest.txt
 
 echo "${OUT}"
 
+if ! echo "${OUT}" | grep -qiE 'LDAP-UserDn|ldap:|Access-'; then
+	echo "(no radclient debug — try: docker logs freeradius --tail 50)"
+fi
+
 if echo "${OUT}" | grep -q 'Access-Accept'; then
 	echo ""
 	echo "OK: FreeRADIUS accepted (WiFi LDAP path works)."

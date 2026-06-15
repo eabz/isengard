@@ -1,7 +1,7 @@
 # Google Workspace Secure LDAP module for FreeRADIUS.
 #
 # Google Secure LDAP does NOT handle OR filters — use ldap_find_* in authorize.
-# Google rejects DN bind for secondary-domain users; inner-tunnel sets LDAP-UserDn to mail.
+# Authenticate binds as mail in LDAP-UserDn (not LDAP DN).
 
 ldap ldap_google {
 	server = 'ldap://127.0.0.1'
@@ -12,7 +12,7 @@ ldap ldap_google {
 
 	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
 
-	# Set in authorize by ldap_find_*; authenticate binds as this mail address.
+	# Mail address set in inner-tunnel authorize (Google rejects DN bind).
 	user_dn = "LDAP-UserDn"
 
 	group {
@@ -45,7 +45,7 @@ ldap ldap_google {
 	}
 }
 
-# --- Authorize-only lookups (simple filters; stop on first match) ---
+# Authorize-only lookups. user_dn = Ldap-UserDn keeps search DN out of LDAP-UserDn.
 
 ldap ldap_find_cedros {
 	server = 'ldap://127.0.0.1'
@@ -53,7 +53,7 @@ ldap ldap_find_cedros {
 	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
 	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
 	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
-	user_dn = "LDAP-UserDn"
+	user_dn = "Ldap-UserDn"
 	user {
 		base_dn = "${..base_dn}"
 		filter = "(mail=%{User-Name}@cedrosnorte.edu.mx)"
@@ -67,7 +67,7 @@ ldap ldap_find_colegios {
 	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
 	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
 	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
-	user_dn = "LDAP-UserDn"
+	user_dn = "Ldap-UserDn"
 	user {
 		base_dn = "${..base_dn}"
 		filter = "(mail=%{User-Name}@colegios-cedros-paseo.mx)"
@@ -81,7 +81,7 @@ ldap ldap_find_uid {
 	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
 	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
 	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
-	user_dn = "LDAP-UserDn"
+	user_dn = "Ldap-UserDn"
 	user {
 		base_dn = "${..base_dn}"
 		filter = "(uid=%{User-Name})"
