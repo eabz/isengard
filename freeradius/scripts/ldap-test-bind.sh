@@ -9,7 +9,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 if ! docker inspect -f '{{.State.Running}}' freeradius 2>/dev/null | grep -q true; then
 	echo "ERROR: freeradius container is not running. Try: docker compose up -d" >&2
-	echo "  docker logs freeradius --tail 30" >&2
 	exit 1
 fi
 
@@ -26,7 +25,6 @@ else
 	echo ""
 fi
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LDAP_CONF="${ROOT}/raddb/mods-available/ldap_google"
 
 read_ldap_var() {
@@ -36,7 +34,7 @@ read_ldap_var() {
 }
 
 ldap_cmd() {
-	docker exec -i freeradius ldapsearch -LLL \
+	docker exec -i freeradius ldapsearch -LLL -o ldif-wrap=no \
 		-H ldap://127.0.0.1:1636 \
 		"$@"
 }
@@ -45,7 +43,6 @@ BASE_DN="$(read_ldap_var base_dn)"
 BIND_DN="$(read_ldap_var identity)"
 BIND_PW="$(read_ldap_var password)"
 
-# Same order as inner-tunnel-google (simple filters; no OR).
 FILTERS="
 (mail=${USER}@cedrosnorte.edu.mx)
 (mail=${USER}@colegios-cedros-paseo.mx)
@@ -58,15 +55,13 @@ echo ""
 echo "--- Step 1: search (FreeRADIUS filters, one by one) ---"
 ENTRY_DN=""
 USER_MAIL=""
-	for FILTER in ${FILTERS}; do
+for FILTER in ${FILTERS}; do
 	echo "filter: ${FILTER}"
 	SEARCH="$(ldap_cmd -D "${BIND_DN}" -w "${BIND_PW}" -b "${BASE_DN}" "${FILTER}" dn uid mail 2>&1)" || true
 	if echo "${SEARCH}" | grep -qiE 'Can.t contact LDAP|Connection refused|restarting'; then
 		echo "${SEARCH}"
 		echo ""
-		echo "ERROR: cannot reach stunnel/LDAP (container may be restarting)."
-		echo "  ./scripts/ldap-check.sh"
-		echo "  docker logs freeradius --tail 30"
+		echo "ERROR: cannot reach stunnel/LDAP."
 		exit 1
 	fi
 	if echo "${SEARCH}" | grep -q '^dn:'; then
@@ -93,26 +88,30 @@ echo "--- Step 2: bind as user (password check) ---"
 try_bind() {
 	BIND_AS="$1"
 	echo "Trying bind as: ${BIND_AS}"
-	OUT="$(docker exec freeradius ldapwhoami -H ldap://127.0.0.1:1636 \
-		-D "${BIND_AS}" -w "${PASS}" 2>&1)" || true
+	OUT="$(ldap_cmd -D "${BIND_AS}" -w "${PASS}" -b "${BASE_DN}" -s base '(objectClass=*)' dn 2>&1)" || true
 	echo "${OUT}"
-	if echo "${OUT}" | grep -qiE 'dn:|Success'; then
+	if echo "${OUT}" | grep -qiE 'ldap_bind: Success|result: 0 Success'; then
 		return 0
 	fi
 	return 1
 }
 
-for BIND_AS in "${USER_MAIL}" "${ENTRY_DN}"; do
+# Same order as FreeRADIUS inner-tunnel (mail address, not DN).
+for BIND_AS in "${USER_MAIL}"; do
 	[ -z "${BIND_AS}" ] && continue
 	if try_bind "${BIND_AS}"; then
 		echo ""
-		echo "OK: password accepted for ${USER} (bind as ${BIND_AS})"
-		echo "Redeploy FreeRADIUS, then retry WiFi: docker compose up -d"
+		echo "OK: password accepted for ${USER}"
 		exit 0
 	fi
 done
 
 echo ""
-echo "FAIL: password rejected by Google LDAP."
-echo "Check OU permissions: 'Verify user credentials' on the user's OU."
+echo "FAIL: Google LDAP rejected the password for ${USER_MAIL}."
+echo ""
+echo "Check:"
+echo "  1. Sign in at https://mail.google.com with the same password"
+echo "  2. Admin > LDAP > Access permissions on user's OU:"
+echo "     'Verify user credentials' (not just Read)"
+echo "  3. If password was just changed, wait 10 minutes and retry"
 exit 1

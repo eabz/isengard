@@ -16,7 +16,7 @@ read_ldap_var() {
 }
 
 ldap_search() {
-	docker exec freeradius ldapsearch -LLL \
+	docker exec freeradius ldapsearch -LLL -o ldif-wrap=no \
 		-H ldap://127.0.0.1:1636 \
 		-D "${BIND_DN}" \
 		-w "${BIND_PW}" \

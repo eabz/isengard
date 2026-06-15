@@ -24,7 +24,7 @@ BIND_DN="$(read_ldap_var identity)"
 BIND_PW="$(read_ldap_var password)"
 BASE_DN="$(read_ldap_var base_dn)"
 
-OUT="$(docker exec freeradius ldapsearch -LLL \
+OUT="$(docker exec freeradius ldapsearch -LLL -o ldif-wrap=no \
 	-H ldap://127.0.0.1:1636 \
 	-D "${BIND_DN}" -w "${BIND_PW}" \
 	-b "${BASE_DN}" -s base '(objectClass=*)' dn 2>&1)" || true
