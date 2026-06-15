@@ -29,10 +29,21 @@ server inner-tunnel {
 			}
 		}
 
-		# Find the user (cedrosnorte + colegios share one tree).
+		# 1) cedrosnorte: found by uid, authenticated with a DN bind.
 		ldap_google
 
-		# If found and a password is present, authenticate by binding as the user.
+		# 2) colegios: uid isn't indexed — look up by mail, then bind as the
+		#    email (Google rejects the DN bind for secondary-domain users).
+		if (notfound) {
+			ldap_colegios
+			if (ok || updated) {
+				update control {
+					&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
+				}
+			}
+		}
+
+		# If a user was found and a password is present, bind as the user.
 		if ((ok || updated) && &User-Password && !&control:Auth-Type) {
 			update control {
 				&Auth-Type := LDAP

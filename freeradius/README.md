@@ -10,32 +10,41 @@ using **EAP-TTLS + PAP** against Google Secure LDAP. Users log in with their
 phone ──EAP-TTLS──> AP ──RADIUS──> FreeRADIUS (default site, outer)
                                         │  EAP/TLS tunnel
                                         ▼
-                                   inner-tunnel  ──uid search + bind──> Google LDAP
-                                        ▲                                   (via stunnel
-                                        └── PAP username/password ──────────  127.0.0.1:1636)
+                                   inner-tunnel  ──search + bind──> Google LDAP
+                                        ▲                              (via stunnel
+                                        └── PAP username/password ─────  127.0.0.1:1636)
 ```
 
-Both domains live in **one** Google directory tree, so a single `(uid=…)` search
-finds users from either domain. Authentication is "bind as user" (Google never
-returns the password hash) — which is why the inner method must be **PAP**.
+Both domains live in **one** Google directory tree, but Google indexes them
+differently:
+
+- **cedrosnorte.edu.mx** (primary): found by `(uid=…)`, authenticated with a **DN bind**.
+- **colegios-cedros-paseo.mx** (secondary): **not** indexed by `uid`; found by
+  `(mail=…@colegios-cedros-paseo.mx)` and authenticated with an **email bind**
+  (Google rejects the DN bind for secondary-domain users → error 49).
+
+The inner-tunnel tries uid first, then the colegios mail lookup, and sets the
+right bind identity. Authentication is "bind as user" (Google never returns the
+password hash) — which is why the inner method must be **PAP**.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `raddb/mods-available/ldap_google` | One LDAP module: uid search + bind-as-user. Put credentials here. |
+| `raddb/mods-available/ldap_google` | Two LDAP instances: `ldap_google` (uid) + `ldap_colegios` (mail). Put credentials in **both**. |
 | `raddb/sites-available/default` | Outer server (APs talk here). EAP only. Sets long `Session-Timeout`. |
-| `raddb/sites-available/inner-tunnel` | Inner tunnel: normalize uid, LDAP auth. |
+| `raddb/sites-available/inner-tunnel` | Inner tunnel: normalize uid, uid→mail lookup, LDAP bind. |
 | `raddb/mods-available/eap` | EAP-TTLS + PAP, TLS session cache, points at `certs/eap/`. |
 | `raddb/clients.conf` | APs + loopback test clients. |
 | `stunnel/google-ldap.conf` | TLS proxy to `ldap.google.com:636`. |
-| `docker-entrypoint.sh` | Enables ldap_google, makes the EAP cert, starts stunnel, validates, runs. |
+| `docker-entrypoint.sh` | Enables the LDAP module, makes the EAP cert, starts stunnel, validates, runs. |
 
 ## Setup
 
-1. **Google LDAP credentials** — edit `raddb/mods-available/ldap_google`:
-   `identity`, `password` (Google Admin → Apps → LDAP → client → access
-   credentials). Keep `base_dn = dc=cedrosnorte,dc=edu,dc=mx`.
+1. **Google LDAP credentials** — edit `raddb/mods-available/ldap_google` and set
+   `identity` + `password` (Google Admin → Apps → LDAP → client → access
+   credentials) in **both** the `ldap_google` and `ldap_colegios` blocks. Keep
+   `base_dn = dc=cedrosnorte,dc=edu,dc=mx`.
 2. **Google client cert** — put `ldap-client.crt` + `ldap-client.key` in
    `raddb/certs/google/`.
 3. **Env** — copy `.env.example` to `.env`, set `HOST_BIND_IP` and

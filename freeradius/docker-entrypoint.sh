@@ -13,6 +13,19 @@ else
 fi
 export RADDB
 
+# --- Secrets from .env (referenced as ${ENV:...} in the config) ------------
+if [ -z "${GOOGLE_LDAP_IDENTITY:-}" ] || [ -z "${GOOGLE_LDAP_PASSWORD:-}" ]; then
+	echo "ERROR: set GOOGLE_LDAP_IDENTITY and GOOGLE_LDAP_PASSWORD in .env." >&2
+	exit 1
+fi
+
+# Default the AP secret so an empty value can't break config parsing.
+: "${RADIUS_CLIENT_SECRET:=CHANGE_ME}"
+export RADIUS_CLIENT_SECRET
+if [ "${RADIUS_CLIENT_SECRET}" = "CHANGE_ME" ]; then
+	echo "WARNING: RADIUS_CLIENT_SECRET not set in .env (using CHANGE_ME); APs will not authenticate." >&2
+fi
+
 # --- Enable the Google LDAP module -----------------------------------------
 ln -sf ../mods-available/ldap_google "${RADDB}/mods-enabled/ldap_google"
 
@@ -67,10 +80,6 @@ if [ ! -f "${CRT}" ] || [ ! -f "${KEY}" ]; then
 	echo "ERROR: Google LDAP client certs missing." >&2
 	echo "  Place ldap-client.crt and ldap-client.key in raddb/certs/google/" >&2
 	exit 1
-fi
-
-if grep -q 'REPLACE_WITH_GOOGLE_LDAP_USERNAME' "${RADDB}/mods-available/ldap_google"; then
-	echo "WARNING: edit raddb/mods-available/ldap_google with your Google LDAP access credentials." >&2
 fi
 
 echo "Starting stunnel TLS proxy to ldap.google.com..."

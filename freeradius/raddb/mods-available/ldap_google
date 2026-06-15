@@ -1,29 +1,33 @@
-# Google Workspace Secure LDAP module for FreeRADIUS.
+# Google Workspace Secure LDAP for FreeRADIUS.
 #
-# One module, one search. cedrosnorte.edu.mx (primary) and colegios-cedros-paseo.mx
-# (secondary) live in the SAME directory tree, so a single uid search finds users
-# from either domain. Authentication is "bind as user" (Google never returns the
-# password hash), which is why WiFi must use EAP-TTLS + PAP.
+# cedrosnorte.edu.mx (primary) and colegios-cedros-paseo.mx (secondary) live in
+# the SAME directory tree, but Google indexes them differently:
+#   - primary   : found by (uid=…)   and authenticates with a DN bind
+#   - secondary : NOT indexed by uid; found by (mail=…@colegios-…) and MUST
+#                 authenticate with an EMAIL bind (DN bind returns 49)
+# So there are two search instances. The inner-tunnel tries uid first, then the
+# colegios mail lookup, and sets the right bind identity.
 #
-# TLS to ldap.google.com:636 is handled by stunnel on 127.0.0.1:1636
-# (avoids the GnuTLS/OpenSSL conflict in the official image).
+# Authentication is "bind as user" (Google never returns the password hash),
+# which is why WiFi must use EAP-TTLS + PAP. TLS to ldap.google.com:636 is
+# handled by stunnel on 127.0.0.1:1636.
 
 ldap ldap_google {
 	server = 'ldap://127.0.0.1'
 	port = 1636
 
-	# Access credentials: Google Admin > Apps > LDAP > client > access credentials.
-	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
-	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
+	# Access credentials come from .env (GOOGLE_LDAP_IDENTITY / GOOGLE_LDAP_PASSWORD),
+	# generated in Google Admin > Apps > LDAP > client > access credentials.
+	identity = "${ENV:GOOGLE_LDAP_IDENTITY}"
+	password = "${ENV:GOOGLE_LDAP_PASSWORD}"
 
-	# Primary domain only. Secondary-domain users are in the same tree.
 	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
 
-	# After the search below, rlm_ldap stores the found DN here and binds as it.
+	# In authorize this caches the found DN here; in authenticate it binds as
+	# whatever LDAP-UserDn holds (DN for cedros, email for colegios).
 	user_dn = "LDAP-UserDn"
 
 	user {
-		# Search the whole tree so users in any OU (Personal, Servicios, ...) match.
 		base_dn = "${..base_dn}"
 		filter = "(uid=%{%{Stripped-User-Name}:-%{User-Name}})"
 		scope = 'sub'
@@ -39,12 +43,48 @@ ldap ldap_google {
 		interval = 3
 	}
 
-	# Modest pool: enough for a school, small enough not to flood stunnel/Google.
 	pool {
 		start = 3
 		min = 1
 		max = 10
 		spare = 3
+		uses = 0
+		retry_delay = 30
+		lifetime = 0
+		idle_timeout = 60
+	}
+}
+
+# Secondary domain lookup (search only); same credentials from .env.
+# The inner-tunnel uses this when the uid search misses, then binds as the email.
+ldap ldap_colegios {
+	server = 'ldap://127.0.0.1'
+	port = 1636
+
+	identity = "${ENV:GOOGLE_LDAP_IDENTITY}"
+	password = "${ENV:GOOGLE_LDAP_PASSWORD}"
+
+	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
+	user_dn = "LDAP-UserDn"
+
+	user {
+		base_dn = "${..base_dn}"
+		filter = "(mail=%{%{Stripped-User-Name}:-%{User-Name}}@colegios-cedros-paseo.mx)"
+		scope = 'sub'
+	}
+
+	options {
+		chase_referrals = no
+		net_timeout = 3
+		res_timeout = 10
+		srv_timelimit = 3
+	}
+
+	pool {
+		start = 1
+		min = 0
+		max = 5
+		spare = 1
 		uses = 0
 		retry_delay = 30
 		lifetime = 0

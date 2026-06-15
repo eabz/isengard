@@ -24,8 +24,16 @@ read_var() {
 }
 
 BASE_DN="$(read_var base_dn)"
-BIND_DN="$(read_var identity)"
-BIND_PW="$(read_var password)"
+# Service-account credentials now live in .env (the config reads them via ${ENV:...}),
+# so pull them from the running container's environment.
+BIND_DN="$(docker exec freeradius printenv GOOGLE_LDAP_IDENTITY 2>/dev/null || true)"
+BIND_PW="$(docker exec freeradius printenv GOOGLE_LDAP_PASSWORD 2>/dev/null || true)"
+
+if [ -z "${BIND_DN}" ] || [ -z "${BIND_PW}" ]; then
+	echo "ERROR: GOOGLE_LDAP_IDENTITY / GOOGLE_LDAP_PASSWORD are not set in the container." >&2
+	echo "  Put them in .env, then: docker compose up -d" >&2
+	exit 1
+fi
 
 ldap() {
 	docker exec -i freeradius ldapsearch -LLL -o ldif-wrap=no -H ldap://127.0.0.1:1636 "$@"
