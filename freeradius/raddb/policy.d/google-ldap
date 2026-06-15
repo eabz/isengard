@@ -1,9 +1,16 @@
-# Normalize login to Google uid (local part only).
-# Works with juan, juan@cedrosnorte.edu.mx, or juan@colegios-cedros-paseo.mx.
+# WiFi login: username only (e.g. jpsanchez).
+# Also accepts jpsanchez@cedrosnorte.edu.mx or jpsanchez@colegios-cedros-paseo.mx.
 google_ldap_strip_username {
 	if (&User-Name =~ /^([^@]+)@/) {
 		update request {
+			&Stripped-User-Name := "%{tolower:%{1}}"
 			&User-Name := "%{tolower:%{1}}"
+		}
+	}
+	else {
+		update request {
+			&Stripped-User-Name := "%{tolower:%{User-Name}}"
+			&User-Name := "%{tolower:%{User-Name}}"
 		}
 	}
 }

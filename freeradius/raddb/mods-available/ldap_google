@@ -33,9 +33,10 @@ ldap ldap_google {
 	user_dn = "LDAP-UserDn"
 
 	user {
-		base_dn = "ou=Users,${..base_dn}"
-		# Google uid = local part of email (unique across all Workspace domains).
-		filter = "(uid=%{User-Name})"
+		# Search entire domain tree (colegios users may live outside ou=Users).
+		base_dn = "${..base_dn}"
+		# uid for most users; mail on both domains for secondary-domain accounts.
+		filter = "(|(uid=%{Stripped-User-Name})(mail=%{Stripped-User-Name}@cedrosnorte.edu.mx)(mail=%{Stripped-User-Name}@colegios-cedros-paseo.mx))"
 		scope = 'sub'
 	}
 
