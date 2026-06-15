@@ -73,8 +73,6 @@ server inner-tunnel {
 				&Auth-Type := LDAP
 			}
 		}
-
-		pap
 	}
 
 	authenticate {
