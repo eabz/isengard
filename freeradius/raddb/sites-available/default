@@ -40,7 +40,6 @@ server default {
 
 	preacct {
 		preprocess
-		acct_unique
 	}
 
 	accounting {
