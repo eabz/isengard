@@ -19,6 +19,7 @@ services:
       - ./raddb/mods-available/ldap_google:/etc/raddb/mods-available/ldap_google:ro
       - ./raddb/mods-available/ldap_google:/etc/freeradius/mods-available/ldap_google:ro
       - ./raddb/clients.conf:/etc/raddb/clients.conf:ro
+      - ./raddb/clients.conf:/etc/freeradius/clients.conf:ro
       - ./raddb/mods-config/files/authorize:/etc/raddb/mods-config/files/authorize:ro
       - ./raddb/sites-available/inner-tunnel-google:/etc/raddb/sites-available/inner-tunnel-google:ro
       - ./raddb/sites-available/inner-tunnel-google:/etc/freeradius/sites-available/inner-tunnel-google:ro
