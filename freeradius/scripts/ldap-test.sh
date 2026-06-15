@@ -31,6 +31,12 @@ ldap() {
 	docker exec -i freeradius ldapsearch -LLL -o ldif-wrap=no -H ldap://127.0.0.1:1636 "$@"
 }
 
+# Pure bind check (no search permissions involved): prints "ldap_bind: ..." on
+# failure, something else on success.
+bind_test() {
+	docker exec -i freeradius ldapwhoami -H ldap://127.0.0.1:1636 -D "$1" -w "$2" 2>&1
+}
+
 echo "=== Google LDAP test: ${USER} ==="
 echo "base_dn: ${BASE_DN}"
 echo ""
@@ -102,19 +108,42 @@ else
 	echo ""
 fi
 
-echo "--- 3. bind as user (the real password check) ---"
-echo "Binding as: ${ENTRY_DN}"
-BIND="$(ldap -D "${ENTRY_DN}" -w "${PASS}" -b "${BASE_DN}" -s base '(objectClass=*)' dn 2>&1)" || true
+echo "--- 3. bind as user (password check: DN, then email) ---"
+BIND_OK=""
+for BID in "${ENTRY_DN}" "${USER_MAIL}"; do
+	[ -n "${BID}" ] || continue
+	printf '  bind as %s ... ' "${BID}"
+	B="$(bind_test "${BID}" "${PASS}")" || true
+	if echo "${B}" | grep -qiE "Invalid credentials|ldap_bind"; then
+		INFO="$(echo "${B}" | sed -n 's/.*additional info: //p' | head -1)"
+		echo "FAIL${INFO:+ ($INFO)}"
+	else
+		echo "OK"
+		BIND_OK="${BID}"
+		break
+	fi
+done
 
-if ! echo "${BIND}" | grep -qiE "Invalid credentials|ldap_bind|error"; then
-	echo "OK: password accepted — WiFi will work for ${USER}."
+if [ -n "${BIND_OK}" ]; then
+	echo ""
+	echo "OK: password accepted, binding as: ${BIND_OK}"
+	echo "    FreeRADIUS should bind this user in that form."
 	exit 0
 fi
 
-echo "${BIND}"
+OU_PATH="$(echo "${ENTRY_DN}" | sed 's/^uid=[^,]*,//')"
 echo ""
-echo "FAIL: Google rejected the password for this user."
-echo "  - Confirm the user can sign in at https://mail.google.com"
-echo "  - After an admin password reset, the user must log into Gmail once"
-echo "  - 2-Step Verification can block LDAP bind for some accounts"
+echo "FAIL: both DN and email bind returned Invalid credentials for ${USER}."
+echo ""
+echo "Search (Read) works on this OU but credential verification does not —"
+echo "almost always the LDAP client's 'Verify user credentials' permission does"
+echo "NOT cover this user's OU:"
+echo "    ${OU_PATH}"
+echo ""
+echo "In Google Admin > Apps > LDAP > your client > Access permissions:"
+echo "  - Read user information   : already covers this OU (search worked)"
+echo "  - Verify user credentials : set to 'Entire domain' OR add ou=Servicios"
+echo ""
+echo "Then confirm the password by signing in at https://mail.google.com as"
+echo "${USER_MAIL} (after any admin reset, log into Gmail once first)."
 exit 1
