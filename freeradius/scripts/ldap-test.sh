@@ -45,25 +45,51 @@ fi
 echo "OK: service account can bind."
 echo ""
 
-echo "--- 2. search (uid=${USER}) ---"
-SEARCH="$(ldap -D "${BIND_DN}" -w "${BIND_PW}" -b "${BASE_DN}" "(uid=${USER})" dn uid mail 2>&1)" || true
-echo "${SEARCH}"
-ENTRY_DN="$(echo "${SEARCH}" | awk '/^dn: / { sub(/^dn: /,""); print; exit }')"
-USER_MAIL="$(echo "${SEARCH}" | awk '/^mail: / { sub(/^mail: /,""); print; exit }')"
+echo "--- 2. find the user (uid, then mail on each domain) ---"
+ENTRY_DN=""
+USER_MAIL=""
+MATCHED=""
+for FILTER in \
+	"(uid=${USER})" \
+	"(mail=${USER}@cedrosnorte.edu.mx)" \
+	"(mail=${USER}@colegios-cedros-paseo.mx)"
+do
+	printf '  %-46s ' "${FILTER}"
+	R="$(ldap -D "${BIND_DN}" -w "${BIND_PW}" -b "${BASE_DN}" "${FILTER}" dn uid mail 2>&1)" || true
+	if echo "${R}" | grep -q '^dn:'; then
+		echo "MATCH"
+		ENTRY_DN="$(echo "${R}" | awk '/^dn: /{sub(/^dn: /,"");print;exit}')"
+		USER_MAIL="$(echo "${R}" | awk '/^mail: /{sub(/^mail: /,"");print;exit}')"
+		MATCHED="${FILTER}"
+		break
+	fi
+	echo "no match"
+done
 
 if [ -z "${ENTRY_DN}" ]; then
 	echo ""
-	echo "FAIL: (uid=${USER}) returned nothing."
-	echo "  The LDAP client cannot see this user. In Google Admin > Apps > LDAP >"
-	echo "  your client > Access permissions, the OU this user is in needs"
-	echo "  'Read user information' AND 'Verify user credentials'."
+	echo "FAIL: ${USER} is not visible to the LDAP client by uid OR mail."
+	echo "  -> Access-permissions issue in Google Admin > Apps > LDAP > your client"
+	echo "     > Access permissions. Permissions are PER-OU: the OU this user sits"
+	echo "     in needs 'Read user information' + 'Verify user credentials', even"
+	echo "     though the colegios domain lives under cedrosnorte."
 	exit 1
 fi
 
 echo ""
-echo "DN:   ${ENTRY_DN}"
-echo "mail: ${USER_MAIL}"
-echo "OU:   $(echo "${ENTRY_DN}" | sed 's/^uid=[^,]*,//')"
+echo "matched: ${MATCHED}"
+echo "DN:      ${ENTRY_DN}"
+echo "mail:    ${USER_MAIL}"
+echo "OU:      $(echo "${ENTRY_DN}" | sed 's/^uid=[^,]*,//')"
+
+case "${MATCHED}" in
+	"(uid="*) ;;
+	*)
+		echo ""
+		echo "NOTE: matched by MAIL, not uid. FreeRADIUS currently searches by uid,"
+		echo "      so it needs the colegios mail lookup added to authenticate this user."
+		;;
+esac
 echo ""
 
 if [ -n "${LDAP_TEST_PASSWORD:-}" ]; then
