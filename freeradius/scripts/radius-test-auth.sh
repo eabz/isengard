@@ -69,6 +69,14 @@ if echo "${OUT}" | grep -qiE 'No reply from server|Connection refused|timed out'
 	exit 1
 fi
 
+if [ "${RC}" = 137 ] || echo "${OUT}" | grep -qiE 'OCI runtime|container.*restarting|connection reset'; then
+	echo ""
+	echo "ERROR: container crashed or restarted during test (exit ${RC})."
+	echo "  docker logs freeradius --tail 80"
+	echo "  If logs show many stunnel connections then 'exited with code 1', LDAP pools were too large."
+	exit 1
+fi
+
 echo ""
 echo "FAIL: FreeRADIUS rejected (exit ${RC})."
 echo "Check output above for LDAP-UserDn / ldap: lines."

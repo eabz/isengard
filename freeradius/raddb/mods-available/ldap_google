@@ -1,9 +1,7 @@
 # Google Workspace Secure LDAP module for FreeRADIUS.
 #
-# TLS to Google is handled by stunnel (see stunnel/google-ldap.conf).
-#
-# cedrosnorte.edu.mx: ldap_google finds users by uid/mail at authenticate (Auth-Type LDAP).
-# colegios-cedros-paseo.mx: ldap_find_colegios in inner-tunnel sets LDAP-UserDn to mail first.
+# cedrosnorte.edu.mx: ldap_google finds users by uid at authenticate (Auth-Type LDAP).
+# colegios-cedros-paseo.mx: ldap_find_colegios sets LDAP-UserDn to mail in inner-tunnel.
 
 ldap ldap_google {
 	server = 'ldap://127.0.0.1'
@@ -14,26 +12,12 @@ ldap ldap_google {
 
 	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
 
-	update {
-		control: += 'radiusControlAttribute'
-		request: += 'radiusRequestAttribute'
-		reply: += 'radiusReplyAttribute'
-	}
-
 	user_dn = "LDAP-UserDn"
 
 	user {
 		base_dn = "ou=Users,${..base_dn}"
-		filter = "(|(mail=%{User-Name})(uid=%{%{Stripped-User-Name}:-%{User-Name}}))"
+		filter = "(uid=%{%{Stripped-User-Name}:-%{User-Name}})"
 		scope = 'sub'
-	}
-
-	group {
-		base_dn = "ou=Groups,${..base_dn}"
-		filter = '(objectClass=posixGroup)'
-		scope = 'sub'
-		name_attribute = cn
-		membership_attribute = 'memberOf'
 	}
 
 	options {
@@ -46,11 +30,12 @@ ldap ldap_google {
 		interval = 3
 	}
 
+	# Keep small: each module opens its own pool to stunnel/Google.
 	pool {
-		start = ${thread[pool].start_servers}
-		min = ${thread[pool].min_spare_servers}
-		max = ${thread[pool].max_servers}
-		spare = ${thread[pool].max_spare_servers}
+		start = 1
+		min = 0
+		max = 2
+		spare = 1
 		uses = 0
 		retry_delay = 30
 		lifetime = 0
@@ -58,7 +43,6 @@ ldap ldap_google {
 	}
 }
 
-# Secondary domain only — Google needs mail bind, not LDAP DN.
 ldap ldap_find_colegios {
 	server = 'ldap://127.0.0.1'
 	port = 1636
@@ -70,5 +54,21 @@ ldap ldap_find_colegios {
 		base_dn = "${..base_dn}"
 		filter = "(mail=%{%{Stripped-User-Name}:-%{User-Name}}@colegios-cedros-paseo.mx)"
 		scope = 'sub'
+	}
+	options {
+		chase_referrals = no
+		res_timeout = 10
+		srv_timelimit = 3
+		net_timeout = 3
+	}
+	pool {
+		start = 1
+		min = 0
+		max = 2
+		spare = 1
+		uses = 0
+		retry_delay = 30
+		lifetime = 0
+		idle_timeout = 60
 	}
 }

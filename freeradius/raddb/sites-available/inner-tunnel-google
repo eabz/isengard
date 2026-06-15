@@ -34,8 +34,15 @@ server inner-tunnel {
 			ok = return
 		}
 
+		if (&User-Password && !control:Auth-Type) {
+			update control {
+				&Auth-Type := ldap
+			}
+		}
+
 		# colegios-cedros-paseo.mx: mail bind before cedros uid/DN path in ldap_google
 		ldap_find_colegios {
+			notfound = ok
 			ok {
 				update request {
 					&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
@@ -43,13 +50,6 @@ server inner-tunnel {
 				update control {
 					&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
 				}
-				ok = return
-			}
-		}
-
-		if (&User-Password && !control:Auth-Type) {
-			update control {
-				&Auth-Type := ldap
 			}
 		}
 

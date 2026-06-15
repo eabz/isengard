@@ -45,4 +45,11 @@ if ! kill -0 "${STUNNEL_PID}" 2>/dev/null; then
 fi
 
 echo "stunnel running (pid ${STUNNEL_PID}) on 127.0.0.1:1636"
+
+echo "Checking FreeRADIUS configuration..."
+if ! freeradius -XC; then
+	echo "ERROR: FreeRADIUS configuration check failed (see above)." >&2
+	exit 1
+fi
+
 exec freeradius "$@"
