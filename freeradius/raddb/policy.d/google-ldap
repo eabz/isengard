@@ -1,6 +1,9 @@
-# Multi-domain Google Workspace (e.g. cedrosnorte.edu.mx + colegios-cedros-paseo.mx):
-# - base_dn uses the PRIMARY domain only
-# - WiFi clients must send the full email as User-Name / Identity
-# - Do not strip @domain; LDAP matches mail= user@any-workspace-domain
+# Normalize login to Google uid (local part only).
+# Works with juan, juan@cedrosnorte.edu.mx, or juan@colegios-cedros-paseo.mx.
 google_ldap_strip_username {
+	if (&User-Name =~ /^([^@]+)@/) {
+		update request {
+			&User-Name := "%{tolower:%{1}}"
+		}
+	}
 }
