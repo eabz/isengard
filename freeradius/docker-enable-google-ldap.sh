@@ -10,20 +10,20 @@ DEFAULT="${RADDB}/sites-available/default"
 EAP="${RADDB}/mods-available/eap"
 
 STRIP_MARKER="Google LDAP: strip @domain from username"
+MULTI_DOMAIN_MARKER="Google LDAP: multi-domain — do not strip @domain from User-Name"
 EAP_MARKER="Google LDAP EAP patched"
 
 ln -sf ../mods-available/ldap_google "${RADDB}/mods-enabled/ldap_google"
 rm -f "${RADDB}/sites-enabled/inner-tunnel"
 ln -sf ../sites-available/inner-tunnel-google "${RADDB}/sites-enabled/inner-tunnel"
 
-if ! grep -q "${STRIP_MARKER}" "${DEFAULT}"; then
+if grep -q "${STRIP_MARKER}" "${DEFAULT}"; then
+	sed -i "/# ${STRIP_MARKER}/,/^[\t ]*}[\t ]*$/d" "${DEFAULT}"
+fi
+
+if ! grep -q "${MULTI_DOMAIN_MARKER}" "${DEFAULT}"; then
 	sed -i "/^[[:space:]]*suffix[[:space:]]*\$/i\\
-\t# ${STRIP_MARKER}\\
-\tif (\&User-Name =~ \\/^([^@]+)@\\/) {\\
-\t\tupdate request {\\
-\t\t\t\&Stripped-User-Name := \"%{1}\"\\
-\t\t}\\
-\t}\\
+\t# ${MULTI_DOMAIN_MARKER}\\
 " "${DEFAULT}"
 fi
 

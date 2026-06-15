@@ -20,8 +20,10 @@ ldap ldap_google {
 	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
 	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
 
-	# Your Google Workspace domain as DN, e.g. example.com -> dc=example,dc=com
-	base_dn = 'dc=example,dc=com'
+	# Primary Google Workspace domain as DN (not secondary domains).
+	# cedrosnorte.edu.mx -> dc=cedrosnorte,dc=edu,dc=mx
+	# Users on colegios-cedros-paseo.mx share this tree; match by full mail.
+	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
 
 	update {
 		control: += 'radiusControlAttribute'
@@ -33,7 +35,8 @@ ldap ldap_google {
 
 	user {
 		base_dn = "ou=Users,${..base_dn}"
-		filter = "(|(mail=%{User-Name})(uid=%{%{Stripped-User-Name}:-%{User-Name}}))"
+		# Full email required (supports multiple Workspace domains on one LDAP tree).
+		filter = "(mail=%{User-Name})"
 		scope = 'sub'
 	}
 
