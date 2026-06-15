@@ -23,6 +23,18 @@ server inner-tunnel {
 			}
 		}
 
+		# Before eap { ok = return } — colegios lookup must always run.
+		ldap_find_colegios
+
+		if (ok) {
+			update request {
+				&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
+			}
+			update control {
+				&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
+			}
+		}
+
 		filter_inner_identity
 		suffix
 
@@ -40,28 +52,26 @@ server inner-tunnel {
 			}
 		}
 
-		# colegios-cedros-paseo.mx: mail bind before cedros uid/DN path in ldap_google
-		ldap_find_colegios
-
-		if (ok) {
-			update request {
-				&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
-			}
-			update control {
-				&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
-			}
-		}
-
 		pap
 	}
 
 	authenticate {
 		Auth-Type PAP {
-			ldap_google
+			if (&LDAP-UserDn =~ /@colegios-cedros-paseo\.mx$/) {
+				ldap_colegios_bind
+			}
+			else {
+				ldap_google
+			}
 		}
 
 		Auth-Type LDAP {
-			ldap_google
+			if (&LDAP-UserDn =~ /@colegios-cedros-paseo\.mx$/) {
+				ldap_colegios_bind
+			}
+			else {
+				ldap_google
+			}
 		}
 
 		eap

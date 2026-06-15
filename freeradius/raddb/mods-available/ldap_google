@@ -1,7 +1,7 @@
 # Google Workspace Secure LDAP module for FreeRADIUS.
 #
-# cedrosnorte.edu.mx: ldap_google finds users by uid at authenticate (Auth-Type LDAP).
-# colegios-cedros-paseo.mx: ldap_find_colegios sets LDAP-UserDn to mail in inner-tunnel.
+# cedrosnorte.edu.mx: ldap_google finds users by uid at authenticate.
+# colegios-cedros-paseo.mx: ldap_find_colegios (authorize) + ldap_colegios_bind (authenticate).
 
 ldap ldap_google {
 	server = 'ldap://127.0.0.1'
@@ -30,7 +30,6 @@ ldap ldap_google {
 		interval = 3
 	}
 
-	# Keep small: each module opens its own pool to stunnel/Google.
 	pool {
 		start = 1
 		min = 0
@@ -43,6 +42,7 @@ ldap ldap_google {
 	}
 }
 
+# Authorize-only: find colegios user by mail (Google OR filters do not work).
 ldap ldap_find_colegios {
 	server = 'ldap://127.0.0.1'
 	port = 1636
@@ -55,6 +55,32 @@ ldap ldap_find_colegios {
 		filter = "(mail=%{%{Stripped-User-Name}:-%{User-Name}}@colegios-cedros-paseo.mx)"
 		scope = 'sub'
 	}
+	options {
+		chase_referrals = no
+		res_timeout = 10
+		srv_timelimit = 3
+		net_timeout = 3
+	}
+	pool {
+		start = 1
+		min = 0
+		max = 2
+		spare = 1
+		uses = 0
+		retry_delay = 30
+		lifetime = 0
+		idle_timeout = 60
+	}
+}
+
+# Authenticate-only: mail bind for colegios (no user {} — avoids DN overwrite).
+ldap ldap_colegios_bind {
+	server = 'ldap://127.0.0.1'
+	port = 1636
+	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
+	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
+	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
+	user_dn = "LDAP-UserDn"
 	options {
 		chase_referrals = no
 		res_timeout = 10

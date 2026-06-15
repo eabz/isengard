@@ -1,5 +1,6 @@
 #!/bin/sh
-# Test FreeRADIUS inner-tunnel LDAP auth (same path as WiFi EAP-TTLS+PAP).
+# Test inner-tunnel LDAP auth (direct to :18120, not full EAP-TTLS).
+# WiFi uses EAP-TTLS on :1812; cedros users may pass WiFi while this test rejects.
 # Usage: LDAP_TEST_PASSWORD='pass' ./scripts/radius-test-auth.sh eberrueta
 set -e
 
@@ -67,8 +68,8 @@ fi
 if echo "${OUT}" | grep -qE 'Received Access-Reject|Expected Access-Accept got Access-Reject'; then
 	echo ""
 	echo "FAIL: FreeRADIUS rejected."
-	echo "  ./scripts/ldap-test-bind.sh ${USER}"
-	echo "  docker logs freeradius --tail 50"
+	echo "  Colegios users: ./scripts/ldap-test-bind.sh ${USER}"
+	echo "  Note: cedros WiFi can work even when this inner-tunnel test fails."
 	exit 1
 fi
 
