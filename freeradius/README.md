@@ -40,7 +40,7 @@ password hash) — which is why the inner method must be **PAP**.
 | `docker-entrypoint.sh` | Enables the LDAP module, makes the EAP cert, starts stunnel, validates, runs. |
 
 All secrets live in `.env` (gitignored) and are read by the config via
-`${ENV:…}`, so `git pull` never conflicts on credentials.
+`$ENV{…}`, so `git pull` never conflicts on credentials.
 
 ## Setup
 

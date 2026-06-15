@@ -13,7 +13,7 @@ else
 fi
 export RADDB
 
-# --- Secrets from .env (referenced as ${ENV:...} in the config) ------------
+# --- Secrets from .env (referenced as $ENV{...} in the config) -------------
 if [ -z "${GOOGLE_LDAP_IDENTITY:-}" ] || [ -z "${GOOGLE_LDAP_PASSWORD:-}" ]; then
 	echo "ERROR: set GOOGLE_LDAP_IDENTITY and GOOGLE_LDAP_PASSWORD in .env." >&2
 	exit 1

@@ -18,8 +18,8 @@ ldap ldap_google {
 
 	# Access credentials come from .env (GOOGLE_LDAP_IDENTITY / GOOGLE_LDAP_PASSWORD),
 	# generated in Google Admin > Apps > LDAP > client > access credentials.
-	identity = "${ENV:GOOGLE_LDAP_IDENTITY}"
-	password = "${ENV:GOOGLE_LDAP_PASSWORD}"
+	identity = "$ENV{GOOGLE_LDAP_IDENTITY}"
+	password = "$ENV{GOOGLE_LDAP_PASSWORD}"
 
 	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
 
@@ -61,8 +61,8 @@ ldap ldap_colegios {
 	server = 'ldap://127.0.0.1'
 	port = 1636
 
-	identity = "${ENV:GOOGLE_LDAP_IDENTITY}"
-	password = "${ENV:GOOGLE_LDAP_PASSWORD}"
+	identity = "$ENV{GOOGLE_LDAP_IDENTITY}"
+	password = "$ENV{GOOGLE_LDAP_PASSWORD}"
 
 	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
 	user_dn = "LDAP-UserDn"

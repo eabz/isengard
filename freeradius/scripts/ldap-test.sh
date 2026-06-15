@@ -24,7 +24,7 @@ read_var() {
 }
 
 BASE_DN="$(read_var base_dn)"
-# Service-account credentials now live in .env (the config reads them via ${ENV:...}),
+# Service-account credentials now live in .env (the config reads them via $ENV{...}),
 # so pull them from the running container's environment.
 BIND_DN="$(docker exec freeradius printenv GOOGLE_LDAP_IDENTITY 2>/dev/null || true)"
 BIND_PW="$(docker exec freeradius printenv GOOGLE_LDAP_PASSWORD 2>/dev/null || true)"
