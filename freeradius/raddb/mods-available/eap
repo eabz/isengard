@@ -1,8 +1,8 @@
 # EAP for WPA2/WPA3 Enterprise against Google Secure LDAP.
 #
-# Outer method: EAP-TTLS. Inner method: PAP (Google LDAP needs the cleartext
-# password to bind as the user). PEAP/MS-CHAP are intentionally NOT offered —
-# they cannot work with Google LDAP.
+# Outer method: EAP-TTLS. Inner method: PAP or EAP-GTC — both deliver the
+# cleartext password so we can bind as the user. (iOS/Android TTLS commonly use
+# inner EAP-GTC.) MS-CHAP/MS-CHAPv2 can NOT work: Google never exposes the hash.
 #
 # Server certificate lives in certs/eap/ (server.pem + server.key + ca.pem).
 # Use a public (Let's Encrypt) cert so phones validate it with no manual CA
