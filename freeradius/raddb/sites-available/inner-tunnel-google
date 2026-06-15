@@ -29,14 +29,29 @@ server inner-tunnel {
 		# Do not run suffix here; username is already normalized above.
 
 		# Google LDAP: one simple filter per domain (OR filters fail on ldap.google.com).
-		# ldap_find_* sets LDAP-UserDn to mail (Google rejects DN bind on secondary domains).
+		# Bind as mail address — Google rejects DN bind for secondary-domain users.
 		ldap_find_cedros {
+			if (ok) {
+				update control {
+					&LDAP-UserDn := "%{User-Name}@cedrosnorte.edu.mx"
+				}
+			}
 			ok = return
 		}
 		ldap_find_colegios {
+			if (ok) {
+				update control {
+					&LDAP-UserDn := "%{User-Name}@colegios-cedros-paseo.mx"
+				}
+			}
 			ok = return
 		}
 		ldap_find_uid {
+			if (ok) {
+				update control {
+					&LDAP-UserDn := &reply:mail
+				}
+			}
 			ok = return
 		}
 
