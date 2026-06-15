@@ -33,10 +33,11 @@ ldap ldap_google {
 
 	user_dn = "LDAP-UserDn"
 
-	user {
+		user {
 		base_dn = "ou=Users,${..base_dn}"
-		# Full email required (supports multiple Workspace domains on one LDAP tree).
-		filter = "(mail=%{User-Name})"
+		# Match LDAP mail (primary email). workspace_normalize_username maps alias
+		# logins @colegios-cedros-paseo.mx -> @cedrosnorte.edu.mx when needed.
+		filter = "(mail=%{tolower:%{User-Name}})"
 		scope = 'sub'
 	}
 

@@ -1,0 +1,16 @@
+# Google Workspace multi-domain login normalization.
+#
+# LDAP mail is usually the user's PRIMARY email. If colegios-cedros-paseo.mx is
+# a domain alias (not separate accounts), users may type @colegios-cedros-paseo.mx
+# on WiFi but LDAP only has mail=@cedrosnorte.edu.mx — map that here.
+#
+# If colegios-cedros-paseo.mx is a secondary domain with its own accounts whose
+# primary mail is @colegios-cedros-paseo.mx, comment out the block below.
+
+workspace_normalize_username {
+	if (&User-Name =~ /^([^@]+)@colegios-cedros-paseo\.mx$/i) {
+		update request {
+			&User-Name := "%{tolower:%{1}}@cedrosnorte.edu.mx"
+		}
+	}
+}

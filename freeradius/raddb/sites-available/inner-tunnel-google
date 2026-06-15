@@ -12,6 +12,7 @@ server inner-tunnel {
 	authorize {
 		filter_username
 		filter_inner_identity
+		workspace_normalize_username
 
 		# Do not run suffix here: it strips @domain from User-Name and breaks
 		# multi-domain Workspace (e.g. cedrosnorte.edu.mx + colegios-cedros-paseo.mx).
