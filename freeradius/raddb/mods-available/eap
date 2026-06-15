@@ -16,6 +16,17 @@ eap {
 	cisco_accounting_username_bug = no
 	max_sessions = 4096
 
+	# Inner methods that carry a cleartext password. EAP-GTC is what iOS/Android
+	# use as the inner method for EAP-TTLS here; it prompts for the password and
+	# hands it to Auth-Type PAP (which the inner-tunnel binds against LDAP).
+	md5 {
+	}
+
+	gtc {
+		# challenge = "Password: "
+		auth_type = "PAP"
+	}
+
 	tls-config tls-common {
 		certificate_file = /etc/raddb/certs/eap/server.pem
 		private_key_file = /etc/raddb/certs/eap/server.key
