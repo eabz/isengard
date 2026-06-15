@@ -1,8 +1,9 @@
-# Inner tunnel for EAP-TTLS + PAP against Google Secure LDAP.
+# Inner tunnel for EAP-TTLS against Google Secure LDAP.
 #
-# The phone sends its username + password (PAP) inside the TLS tunnel; that lands
-# here. We normalize the username to a bare lowercase uid, look the user up in
-# Google LDAP, then bind as that user to verify the password.
+# Handles both inner methods that carry a cleartext password: plain PAP and
+# EAP-GTC. (MS-CHAPv2 cannot work — Google never exposes the password hash.)
+# We normalize the username to a bare lowercase uid, look the user up in Google
+# LDAP, then bind as that user (DN for cedros, email for colegios).
 
 server inner-tunnel {
 
@@ -28,11 +29,11 @@ server inner-tunnel {
 			}
 		}
 
-		# 1) cedrosnorte: found by uid, authenticated with a DN bind.
+		# Find the user FIRST (before eap), so the bind identity is ready whether
+		# the phone uses plain PAP or inner EAP-GTC.
+		#   cedrosnorte : found by uid  -> bind as the DN
+		#   colegios    : found by mail -> bind as the email (DN bind returns 49)
 		ldap_google
-
-		# 2) colegios: uid isn't indexed — look up by mail, then bind as the
-		#    email (Google rejects the DN bind for secondary-domain users).
 		if (notfound) {
 			ldap_colegios
 			if (ok || updated) {
@@ -42,8 +43,15 @@ server inner-tunnel {
 			}
 		}
 
-		# If a user was found and a password is present, bind as the user.
-		if ((ok || updated) && &User-Password && !&control:Auth-Type) {
+		# Inner EAP-GTC: drive the tunneled EAP exchange. Challenge rounds stop
+		# here (handled); the final round leaves &User-Password set and the gtc
+		# submodule sets Auth-Type := PAP.
+		eap {
+			ok = return
+		}
+
+		# Plain PAP, or GTC just delivered the password: do the LDAP bind.
+		if (&User-Password && !&control:Auth-Type) {
 			update control {
 				&Auth-Type := LDAP
 			}
@@ -51,7 +59,11 @@ server inner-tunnel {
 	}
 
 	authenticate {
+		# Both bind as &control:LDAP-UserDn (DN for cedros, email for colegios).
 		Auth-Type LDAP {
+			ldap_google
+		}
+		Auth-Type PAP {
 			ldap_google
 		}
 
