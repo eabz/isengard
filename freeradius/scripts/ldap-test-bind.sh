@@ -4,8 +4,16 @@
 set -e
 
 USER="$(echo "${1:?usage: $0 <username>}" | tr '[:upper:]' '[:lower:]')"
-read -r -s -p "Google password for ${USER}: " PASS
-echo ""
+
+if [ -n "${LDAP_TEST_PASSWORD:-}" ]; then
+	PASS="${LDAP_TEST_PASSWORD}"
+else
+	printf "Google password for %s: " "${USER}"
+	stty -echo 2>/dev/null || true
+	read -r PASS
+	stty echo 2>/dev/null || true
+	echo ""
+fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LDAP_CONF="${ROOT}/raddb/mods-available/ldap_google"
