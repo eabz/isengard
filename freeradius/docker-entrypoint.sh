@@ -42,8 +42,22 @@ if [ ! -s "${EAPDIR}/server.pem" ] || [ ! -s "${EAPDIR}/server.key" ] || [ ! -s 
 		-out "${EAPDIR}/server.pem" -days 3650 -extfile "${EXT}" >/dev/null 2>&1
 
 	rm -f "${EAPDIR}/server.csr" "${EXT}"
-	chmod 600 "${EAPDIR}/server.key" "${EAPDIR}/ca.key" 2>/dev/null || true
 fi
+
+# FreeRADIUS drops to an unprivileged user before loading the cert, so the key
+# must be readable by it. A Let's Encrypt key installed by acme.sh is root:600,
+# which otherwise fails with "Permission denied".
+FR_USER=""
+for u in freerad freeradius radiusd; do
+	if id "${u}" >/dev/null 2>&1; then FR_USER="${u}"; break; fi
+done
+if [ -n "${FR_USER}" ]; then
+	chown -R "${FR_USER}":"${FR_USER}" "${EAPDIR}" 2>/dev/null || true
+fi
+chmod 750 "${EAPDIR}" 2>/dev/null || true
+chmod 640 "${EAPDIR}/server.key" 2>/dev/null || true
+chmod 644 "${EAPDIR}/server.pem" "${EAPDIR}/ca.pem" 2>/dev/null || true
+rm -f "${EAPDIR}/ca.key" 2>/dev/null || true
 
 # --- Google Secure LDAP over stunnel ---------------------------------------
 CRT="${RADDB}/certs/google/ldap-client.crt"
