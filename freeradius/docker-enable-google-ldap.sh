@@ -21,7 +21,7 @@ if ! grep -q "${STRIP_MARKER}" "${DEFAULT}"; then
 \t# ${STRIP_MARKER}\\
 \tif (\&User-Name =~ \\/^([^@]+)@\\/) {\\
 \t\tupdate request {\\
-\t\t\t\&User-Name := \"%{tolower:%{1}}\"\\
+\t\t\t\&Stripped-User-Name := \"%{tolower:%{1}}\"\\
 \t\t}\\
 \t}\\
 " "${DEFAULT}"

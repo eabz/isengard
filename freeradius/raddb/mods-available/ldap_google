@@ -1,7 +1,9 @@
 # Google Workspace Secure LDAP module for FreeRADIUS.
 #
-# Google Secure LDAP does NOT handle OR filters — use ldap_find_* in authorize.
-# Authenticate binds as mail in LDAP-UserDn (not LDAP DN).
+# TLS to Google is handled by stunnel (see stunnel/google-ldap.conf).
+#
+# cedrosnorte.edu.mx: ldap_google finds users by uid/mail at authenticate (Auth-Type LDAP).
+# colegios-cedros-paseo.mx: ldap_find_colegios in inner-tunnel sets LDAP-UserDn to mail first.
 
 ldap ldap_google {
 	server = 'ldap://127.0.0.1'
@@ -12,8 +14,19 @@ ldap ldap_google {
 
 	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
 
-	# Mail address set in inner-tunnel authorize (Google rejects DN bind).
+	update {
+		control: += 'radiusControlAttribute'
+		request: += 'radiusRequestAttribute'
+		reply: += 'radiusReplyAttribute'
+	}
+
 	user_dn = "LDAP-UserDn"
+
+	user {
+		base_dn = "ou=Users,${..base_dn}"
+		filter = "(|(mail=%{User-Name})(uid=%{%{Stripped-User-Name}:-%{User-Name}}))"
+		scope = 'sub'
+	}
 
 	group {
 		base_dn = "ou=Groups,${..base_dn}"
@@ -45,22 +58,7 @@ ldap ldap_google {
 	}
 }
 
-# Authorize-only lookups. user_dn = Ldap-UserDn keeps search DN out of LDAP-UserDn.
-
-ldap ldap_find_cedros {
-	server = 'ldap://127.0.0.1'
-	port = 1636
-	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
-	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
-	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
-	user_dn = "Ldap-UserDn"
-	user {
-		base_dn = "${..base_dn}"
-		filter = "(mail=%{User-Name}@cedrosnorte.edu.mx)"
-		scope = 'sub'
-	}
-}
-
+# Secondary domain only — Google needs mail bind, not LDAP DN.
 ldap ldap_find_colegios {
 	server = 'ldap://127.0.0.1'
 	port = 1636
@@ -70,21 +68,7 @@ ldap ldap_find_colegios {
 	user_dn = "Ldap-UserDn"
 	user {
 		base_dn = "${..base_dn}"
-		filter = "(mail=%{User-Name}@colegios-cedros-paseo.mx)"
-		scope = 'sub'
-	}
-}
-
-ldap ldap_find_uid {
-	server = 'ldap://127.0.0.1'
-	port = 1636
-	identity = 'REPLACE_WITH_GOOGLE_LDAP_USERNAME'
-	password = 'REPLACE_WITH_GOOGLE_LDAP_PASSWORD'
-	base_dn = 'dc=cedrosnorte,dc=edu,dc=mx'
-	user_dn = "Ldap-UserDn"
-	user {
-		base_dn = "${..base_dn}"
-		filter = "(uid=%{User-Name})"
+		filter = "(mail=%{%{Stripped-User-Name}:-%{User-Name}}@colegios-cedros-paseo.mx)"
 		scope = 'sub'
 	}
 }

@@ -11,67 +11,61 @@ server inner-tunnel {
 
 	authorize {
 		filter_username
-		filter_inner_identity
 
 		if (&User-Name =~ /^([^@]+)@/) {
 			update request {
-				&User-Name := "%{tolower:%{1}}"
+				&Stripped-User-Name := "%{tolower:%{1}}"
 			}
 		}
 		else {
 			update request {
-				&User-Name := "%{tolower:%{User-Name}}"
+				&Stripped-User-Name := "%{tolower:%{User-Name}}"
 			}
 		}
 
-		ldap_find_cedros {
-			ok {
-				update control {
-					&LDAP-UserDn := "%{User-Name}@cedrosnorte.edu.mx"
-				}
-				update request {
-					&LDAP-UserDn := "%{User-Name}@cedrosnorte.edu.mx"
-				}
-				ok = return
-			}
-		}
-		ldap_find_colegios {
-			ok {
-				update control {
-					&LDAP-UserDn := "%{User-Name}@colegios-cedros-paseo.mx"
-				}
-				update request {
-					&LDAP-UserDn := "%{User-Name}@colegios-cedros-paseo.mx"
-				}
-				ok = return
-			}
-		}
-		ldap_find_uid {
-			ok {
-				update control {
-					&LDAP-UserDn := &reply:mail
-				}
-				update request {
-					&LDAP-UserDn := &reply:mail
-				}
-				ok = return
-			}
-		}
-
-		if (!&control:LDAP-UserDn && !&request:LDAP-UserDn) {
-			reject
-		}
+		filter_inner_identity
+		suffix
 
 		update control {
 			&Proxy-To-Realm := LOCAL
-			&Auth-Type := PAP
 		}
+
+		eap {
+			ok = return
+		}
+
+		# colegios-cedros-paseo.mx: mail bind before cedros uid/DN path in ldap_google
+		ldap_find_colegios {
+			ok {
+				update request {
+					&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
+				}
+				update control {
+					&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
+				}
+				ok = return
+			}
+		}
+
+		if (&User-Password && !control:Auth-Type) {
+			update control {
+				&Auth-Type := ldap
+			}
+		}
+
+		pap
 	}
 
 	authenticate {
 		Auth-Type PAP {
 			ldap_google
 		}
+
+		Auth-Type LDAP {
+			ldap_google
+		}
+
+		eap
 	}
 
 	session {
@@ -80,10 +74,6 @@ server inner-tunnel {
 	post-auth {
 		Post-Auth-Type REJECT {
 			attr_filter.access_reject
-
-			update reply {
-				&Reply-Message := &request:Module-Failure-Message
-			}
 
 			update outer.session-state {
 				&Module-Failure-Message := &request:Module-Failure-Message

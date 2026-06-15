@@ -18,27 +18,43 @@ if ! docker inspect -f '{{.State.Running}}' freeradius 2>/dev/null | grep -q tru
 	exit 1
 fi
 
-echo "=== FreeRADIUS inner-tunnel auth test: ${USER} ==="
+RADCLIENT="$(docker exec freeradius sh -c 'command -v radclient' 2>/dev/null || true)"
+if [ -z "${RADCLIENT}" ]; then
+	echo "ERROR: radclient not in container. Rebuild: docker compose up -d --build" >&2
+	exit 1
+fi
 
-# Base64 avoids shell escaping issues for special characters in passwords.
+echo "=== FreeRADIUS inner-tunnel auth test: ${USER} ==="
+echo "radclient: ${RADCLIENT}"
+
 PASS_B64="$(printf '%s' "${LDAP_TEST_PASSWORD}" | base64 | tr -d '\n')"
 
 OUT="$(docker exec \
 	-e "RADIUS_USER=${USER}" \
 	-e "RADIUS_PASS_B64=${PASS_B64}" \
-	freeradius sh -ec '
-pass=$(printf "%s" "$RADIUS_PASS_B64" | base64 -d)
-user=$(printf "%s" "$RADIUS_USER" | sed "s/\"/\\\\\"/g")
-pass=$(printf "%s" "$pass" | sed "s/\"/\\\\\"/g")
-printf "User-Name = %s\nUser-Password = \"%s\"\n" "$user" "$pass" > /tmp/radtest.txt
+	freeradius sh -ec "
+pass=\$(printf '%s' \"\$RADIUS_PASS_B64\" | base64 -d)
+user=\$(printf '%s' \"\$RADIUS_USER\" | sed 's/\"/\\\\\"/g')
+pass=\$(printf '%s' \"\$pass\" | sed 's/\"/\\\\\"/g')
+printf 'User-Name = %s\nUser-Password = \"%s\"\n' \"\$user\" \"\$pass\" > /tmp/radtest.txt
+echo '--- radclient request ---'
+cat /tmp/radtest.txt
+echo '--- radclient response ---'
 radclient -x 127.0.0.1:18120 auth testing123 -f /tmp/radtest.txt 2>&1
+RC=\$?
 rm -f /tmp/radtest.txt
-')" || true
+exit \$RC
+" 2>&1)" || RC=$?
 
+RC="${RC:-0}"
 echo "${OUT}"
 
-if ! echo "${OUT}" | grep -qiE 'LDAP-UserDn|ldap:|Access-'; then
-	echo "(no radclient debug — try: docker logs freeradius --tail 50)"
+if [ -z "${OUT}" ]; then
+	echo ""
+	echo "ERROR: empty output from radclient (exit ${RC})."
+	echo "  docker compose up -d --build"
+	echo "  docker logs freeradius --tail 50"
+	exit 1
 fi
 
 if echo "${OUT}" | grep -q 'Access-Accept'; then
@@ -47,17 +63,13 @@ if echo "${OUT}" | grep -q 'Access-Accept'; then
 	exit 0
 fi
 
-if echo "${OUT}" | grep -qiE 'Error parsing|No reply|Connection refused|timed out|Bad substitution'; then
+if echo "${OUT}" | grep -qiE 'No reply from server|Connection refused|timed out'; then
 	echo ""
-	echo "ERROR: could not run radclient against inner-tunnel (127.0.0.1:18120)."
-	echo "  docker logs freeradius --tail 30"
+	echo "ERROR: no RADIUS reply on 127.0.0.1:18120 (check clients.conf localhost + secret testing123)."
 	exit 1
 fi
 
 echo ""
-echo "FAIL: FreeRADIUS rejected."
-echo "Look for: LDAP-UserDn, ldap: ERROR, Access-Reject"
-echo ""
-echo "Tip:"
-echo "  LDAP_TEST_PASSWORD='your-password' ./scripts/radius-test-auth.sh ${USER}"
+echo "FAIL: FreeRADIUS rejected (exit ${RC})."
+echo "Check output above for LDAP-UserDn / ldap: lines."
 exit 1
