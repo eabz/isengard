@@ -3,7 +3,7 @@
 #
 #   ./scripts/ldap-test-user.sh erbutcher
 #   ./scripts/ldap-test-user.sh --mail erbutcher@colegios-cedros-paseo.mx
-#   ./scripts/ldap-test-user.sh --list
+#   ./scripts/ldap-test-user.sh --domains
 set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -47,6 +47,23 @@ print_result() {
 	return 1
 }
 
+count_domains() {
+	echo "=== Mail domains visible in LDAP ==="
+	echo "base_dn: ${BASE_DN}"
+	echo ""
+	RESULT="$(ldap_search '(objectClass=posixAccount)' mail 2>&1)" || true
+	echo "${RESULT}" | grep '^mail:' | sed 's/^mail:[[:space:]]*//' \
+		| awk -F@ '{print "@" $2}' | sort | uniq -c | sort -rn
+	echo ""
+	COLEGIOS="$(echo "${RESULT}" | grep -c '@colegios-cedros-paseo.mx' || true)"
+	echo "Users with @colegios-cedros-paseo.mx in LDAP: ${COLEGIOS}"
+	if [ "${COLEGIOS}" = "0" ]; then
+		echo ""
+		echo "No colegios users in LDAP — add 'Read user information' +"
+		echo "'Verify user credentials' on their OU in Admin > Apps > LDAP."
+	fi
+}
+
 list_users() {
 	echo "=== LDAP users visible to this client (first 25) ==="
 	echo "base_dn: ${BASE_DN}"
@@ -55,7 +72,7 @@ list_users() {
 	echo "${RESULT}" | head -100
 	echo ""
 	COUNT="$(echo "${RESULT}" | grep -c '^dn:' || true)"
-	echo "Total entries shown above: ${COUNT}"
+	echo "Total entries: ${COUNT}"
 	if [ "${COUNT}" = "0" ]; then
 		echo ""
 		echo "No users visible — LDAP client likely has no OU with 'Read user information'."
@@ -111,6 +128,9 @@ case "${1:-}" in
 	--list|-l)
 		list_users
 		;;
+	--domains|-d)
+		count_domains
+		;;
 	--mail|-m)
 		[ -n "${2:-}" ] || { echo "usage: $0 --mail user@domain.com" >&2; exit 1; }
 		test_mail "$2"
@@ -119,6 +139,7 @@ case "${1:-}" in
 		echo "usage: $0 <username>"
 		echo "       $0 --mail user@domain.com"
 		echo "       $0 --list"
+		echo "       $0 --domains"
 		;;
 	'')
 		echo "usage: $0 <username>" >&2
