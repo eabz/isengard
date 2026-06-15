@@ -18,21 +18,19 @@ if ! docker inspect -f '{{.State.Running}}' freeradius 2>/dev/null | grep -q tru
 	exit 1
 fi
 
-if ! docker exec freeradius test -x /usr/bin/radclient 2>/dev/null \
-	&& ! docker exec freeradius test -x /usr/local/bin/radclient 2>/dev/null; then
-	echo "ERROR: radclient not found in container." >&2
-	exit 1
-fi
-
 echo "=== FreeRADIUS inner-tunnel auth test: ${USER} ==="
 
-# Write attribute file inside container (handles special chars in passwords).
+# Base64 avoids shell escaping issues for special characters in passwords.
+PASS_B64="$(printf '%s' "${LDAP_TEST_PASSWORD}" | base64 | tr -d '\n')"
+
 OUT="$(docker exec \
 	-e "RADIUS_USER=${USER}" \
-	-e "RADIUS_PASS=${LDAP_TEST_PASSWORD}" \
+	-e "RADIUS_PASS_B64=${PASS_B64}" \
 	freeradius sh -ec '
-p="${RADIUS_PASS//\"/\\\"}"
-printf "User-Name = %s\nUser-Password = \"%s\"\n" "$RADIUS_USER" "$p" > /tmp/radtest.txt
+pass=$(printf "%s" "$RADIUS_PASS_B64" | base64 -d)
+user=$(printf "%s" "$RADIUS_USER" | sed "s/\"/\\\\\"/g")
+pass=$(printf "%s" "$pass" | sed "s/\"/\\\\\"/g")
+printf "User-Name = %s\nUser-Password = \"%s\"\n" "$user" "$pass" > /tmp/radtest.txt
 radclient -x 127.0.0.1:18120 auth testing123 -f /tmp/radtest.txt 2>&1
 rm -f /tmp/radtest.txt
 ')" || true
@@ -45,9 +43,9 @@ if echo "${OUT}" | grep -q 'Access-Accept'; then
 	exit 0
 fi
 
-if echo "${OUT}" | grep -qiE 'Error parsing|No reply|Connection refused|timed out'; then
+if echo "${OUT}" | grep -qiE 'Error parsing|No reply|Connection refused|timed out|Bad substitution'; then
 	echo ""
-	echo "ERROR: radclient could not talk to inner-tunnel on 127.0.0.1:18120"
+	echo "ERROR: could not run radclient against inner-tunnel (127.0.0.1:18120)."
 	echo "  docker logs freeradius --tail 30"
 	exit 1
 fi
@@ -56,6 +54,6 @@ echo ""
 echo "FAIL: FreeRADIUS rejected."
 echo "Look for: LDAP-UserDn, ldap: ERROR, Access-Reject"
 echo ""
-echo "Tip: use env var to avoid shell escaping issues:"
+echo "Tip:"
 echo "  LDAP_TEST_PASSWORD='your-password' ./scripts/radius-test-auth.sh ${USER}"
 exit 1
