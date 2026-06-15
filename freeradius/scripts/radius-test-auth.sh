@@ -26,6 +26,7 @@ fi
 
 echo "=== FreeRADIUS inner-tunnel auth test: ${USER} ==="
 echo "radclient: ${RADCLIENT}"
+echo "Path: docker exec → 127.0.0.1:18120 (client localhost in clients.conf)"
 
 PASS_B64="$(printf '%s' "${LDAP_TEST_PASSWORD}" | base64 | tr -d '\n')"
 
@@ -65,7 +66,11 @@ fi
 
 if echo "${OUT}" | grep -qiE 'No reply from server|Connection refused|timed out'; then
 	echo ""
-	echo "ERROR: no RADIUS reply on 127.0.0.1:18120 (check clients.conf localhost + secret testing123)."
+	echo "ERROR: no RADIUS reply on 127.0.0.1:18120."
+	echo "  docker exec uses source 127.0.0.1 → needs client localhost (secret testing123)."
+	echo "  Tests from the host use client docker_bridge (172.16.0.0/12)."
+	echo "  docker compose restart freeradius   # reload clients.conf"
+	echo "  docker logs freeradius --tail 30 | grep -i unknown"
 	exit 1
 fi
 
