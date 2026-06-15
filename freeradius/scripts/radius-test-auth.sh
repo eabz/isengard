@@ -58,10 +58,18 @@ if [ -z "${OUT}" ]; then
 	exit 1
 fi
 
-if echo "${OUT}" | grep -q 'Access-Accept'; then
+if echo "${OUT}" | grep -q 'Received Access-Accept'; then
 	echo ""
 	echo "OK: FreeRADIUS accepted (WiFi LDAP path works)."
 	exit 0
+fi
+
+if echo "${OUT}" | grep -qE 'Received Access-Reject|Expected Access-Accept got Access-Reject'; then
+	echo ""
+	echo "FAIL: FreeRADIUS rejected."
+	echo "  ./scripts/ldap-test-bind.sh ${USER}"
+	echo "  docker logs freeradius --tail 50"
+	exit 1
 fi
 
 if echo "${OUT}" | grep -qiE 'No reply from server|Connection refused|timed out'; then
@@ -83,6 +91,6 @@ if [ "${RC}" = 137 ] || echo "${OUT}" | grep -qiE 'OCI runtime|container.*restar
 fi
 
 echo ""
-echo "FAIL: FreeRADIUS rejected (exit ${RC})."
-echo "Check output above for LDAP-UserDn / ldap: lines."
+echo "FAIL: FreeRADIUS auth failed (exit ${RC})."
+echo "Check output above; try: ./scripts/ldap-test-bind.sh ${USER}"
 exit 1
