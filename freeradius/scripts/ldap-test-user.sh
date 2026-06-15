@@ -1,9 +1,11 @@
 #!/bin/sh
-# Test whether a Google LDAP user exists (run from freeradius/ on the host).
-# Usage: ./scripts/ldap-test-user.sh erbutcher
+# Test Google LDAP visibility (run from freeradius/ on the host).
+#
+#   ./scripts/ldap-test-user.sh erbutcher
+#   ./scripts/ldap-test-user.sh --mail erbutcher@colegios-cedros-paseo.mx
+#   ./scripts/ldap-test-user.sh --list
 set -e
 
-USER="${1:?usage: $0 <username>}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LDAP_CONF="${ROOT}/raddb/mods-available/ldap_google"
 
@@ -36,50 +38,93 @@ if echo "${BIND_DN}" | grep -q 'REPLACE_WITH'; then
 	exit 1
 fi
 
-EXACT_FILTER="(|(uid=${USER})(mail=${USER}@cedrosnorte.edu.mx)(mail=${USER}@colegios-cedros-paseo.mx))"
-WILDCARD_FILTER="(|(uid=*${USER}*)(mail=*${USER}*))"
+print_result() {
+	RESULT="$1"
+	echo "${RESULT}"
+	if echo "${RESULT}" | grep -q '^dn:'; then
+		return 0
+	fi
+	return 1
+}
 
-echo "=== Google LDAP test for: ${USER} ==="
-echo "base_dn: ${BASE_DN}"
-echo ""
+list_users() {
+	echo "=== LDAP users visible to this client (first 25) ==="
+	echo "base_dn: ${BASE_DN}"
+	echo ""
+	RESULT="$(ldap_search '(objectClass=posixAccount)' uid mail dn 2>&1)" || true
+	echo "${RESULT}" | head -100
+	echo ""
+	COUNT="$(echo "${RESULT}" | grep -c '^dn:' || true)"
+	echo "Total entries shown above: ${COUNT}"
+	if [ "${COUNT}" = "0" ]; then
+		echo ""
+		echo "No users visible — LDAP client likely has no OU with 'Read user information'."
+	fi
+}
 
-echo "--- Exact match (same filter as FreeRADIUS) ---"
-echo "filter: ${EXACT_FILTER}"
-RESULT="$(ldap_search "${EXACT_FILTER}" uid mail dn 2>&1)" || true
-echo "${RESULT}"
-echo ""
-
-if echo "${RESULT}" | grep -q '^dn:'; then
-	echo "OK: user found."
-	exit 0
-fi
-
-if echo "${RESULT}" | grep -qi 'ldap_bind: Invalid credentials'; then
-	echo "ERROR: LDAP service account bind failed. Check identity/password in ldap_google." >&2
+test_mail() {
+	MAIL="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
+	echo "=== Google LDAP test for mail: ${MAIL} ==="
+	echo "base_dn: ${BASE_DN}"
+	echo ""
+	echo "--- (mail=${MAIL}) ---"
+	print_result "$(ldap_search "(mail=${MAIL})" uid mail dn 2>&1)" && exit 0
+	echo "NOT FOUND"
 	exit 1
-fi
+}
 
-echo "NOT FOUND with exact filter."
-echo "If you only see 'ldap_bind: Success', the service account works but this user"
-echo "is not visible in LDAP (wrong username, OU without LDAP access, or suspended)."
-echo ""
+test_user() {
+	USER="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
+	echo "=== Google LDAP test for: ${USER} ==="
+	echo "base_dn: ${BASE_DN}"
+	echo ""
 
-echo "--- Wildcard search (uid or mail contains '${USER}') ---"
-echo "filter: ${WILDCARD_FILTER}"
-WRESULT="$(ldap_search "${WILDCARD_FILTER}" uid mail dn 2>&1)" || true
-echo "${WRESULT}"
-echo ""
+	echo "--- (uid=${USER}) ---"
+	if print_result "$(ldap_search "(uid=${USER})" uid mail dn 2>&1)"; then exit 0; fi
+	echo "NOT FOUND"
+	echo ""
 
-if echo "${WRESULT}" | grep -q '^dn:'; then
-	echo "HINT: a similar account exists — check uid/mail above and use that username on WiFi."
-	exit 0
-fi
+	echo "--- (mail=${USER}@cedrosnorte.edu.mx) ---"
+	if print_result "$(ldap_search "(mail=${USER}@cedrosnorte.edu.mx)" uid mail dn 2>&1)"; then exit 0; fi
+	echo "NOT FOUND"
+	echo ""
 
-echo "No LDAP entry contains '${USER}'."
-echo ""
-echo "Check in Google Admin:"
-echo "  1. User exists and is not suspended"
-echo "  2. Apps > LDAP > your client > Access permissions:"
-echo "     OU must have 'Read user information' AND 'Verify user credentials'"
-echo "  3. User's real login (Admin > Users > user > Email / Username)"
-exit 1
+	echo "--- (mail=${USER}@colegios-cedros-paseo.mx) ---"
+	if print_result "$(ldap_search "(mail=${USER}@colegios-cedros-paseo.mx)" uid mail dn 2>&1)"; then exit 0; fi
+	echo "NOT FOUND"
+	echo ""
+
+	echo "User '${USER}' not visible in LDAP with uid or mail on either domain."
+	echo ""
+	echo "Next steps:"
+	echo "  1. Test a cedrosnorte user who CAN connect:"
+	echo "       ./scripts/ldap-test-user.sh <usuario-cedrosnorte>"
+	echo "  2. List all users this LDAP client can see:"
+	echo "       ./scripts/ldap-test-user.sh --list"
+	echo "  3. If --list shows cedrosnorte but not colegios users, the LDAP client"
+	echo "     is missing 'Read user information' on the colegios OU."
+	echo "  4. In Admin, confirm PRIMARY email (LDAP mail = primary, not aliases)."
+	exit 1
+}
+
+case "${1:-}" in
+	--list|-l)
+		list_users
+		;;
+	--mail|-m)
+		[ -n "${2:-}" ] || { echo "usage: $0 --mail user@domain.com" >&2; exit 1; }
+		test_mail "$2"
+		;;
+	--help|-h)
+		echo "usage: $0 <username>"
+		echo "       $0 --mail user@domain.com"
+		echo "       $0 --list"
+		;;
+	'')
+		echo "usage: $0 <username>" >&2
+		exit 1
+		;;
+	*)
+		test_user "$1"
+		;;
+esac
