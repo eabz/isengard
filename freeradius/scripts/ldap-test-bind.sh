@@ -55,6 +55,7 @@ echo ""
 echo "--- Step 1: search (FreeRADIUS filters, one by one) ---"
 ENTRY_DN=""
 USER_MAIL=""
+MATCHED_FILTER=""
 for FILTER in ${FILTERS}; do
 	echo "filter: ${FILTER}"
 	SEARCH="$(ldap_cmd -D "${BIND_DN}" -w "${BIND_PW}" -b "${BASE_DN}" "${FILTER}" dn uid mail 2>&1)" || true
@@ -68,6 +69,7 @@ for FILTER in ${FILTERS}; do
 		echo "${SEARCH}"
 		ENTRY_DN="$(echo "${SEARCH}" | awk '/^dn: / { sub(/^dn: /,""); print; exit }')"
 		USER_MAIL="$(echo "${SEARCH}" | awk '/^mail: / { sub(/^mail: /,""); print; exit }')"
+		MATCHED_FILTER="${FILTER}"
 		break
 	fi
 	echo "(not found)"
@@ -79,39 +81,49 @@ if [ -z "${ENTRY_DN}" ]; then
 	exit 1
 fi
 
+# Same mail address FreeRADIUS sets in inner-tunnel after ldap_find_*.
+case "${MATCHED_FILTER}" in
+	*colegios-cedros-paseo.mx*)
+		RADIUS_BIND_ID="${USER}@colegios-cedros-paseo.mx"
+		;;
+	*cedrosnorte.edu.mx*)
+		RADIUS_BIND_ID="${USER}@cedrosnorte.edu.mx"
+		;;
+	*)
+		RADIUS_BIND_ID="${USER_MAIL}"
+		;;
+esac
+
 echo ""
-echo "Found DN: ${ENTRY_DN}"
-echo "mail:     ${USER_MAIL}"
+echo "Found DN:   ${ENTRY_DN}"
+echo "mail:       ${USER_MAIL}"
+echo "FreeRADIUS binds as: ${RADIUS_BIND_ID}"
 echo ""
 
 echo "--- Step 2: bind as user (password check) ---"
-try_bind() {
-	BIND_AS="$1"
-	echo "Trying bind as: ${BIND_AS}"
-	OUT="$(ldap_cmd -D "${BIND_AS}" -w "${PASS}" -b "${BASE_DN}" -s base '(objectClass=*)' dn 2>&1)" || true
-	echo "${OUT}"
-	if echo "${OUT}" | grep -qiE 'ldap_bind: Success|result: 0 Success'; then
-		return 0
-	fi
-	return 1
-}
+echo "Trying bind as: ${RADIUS_BIND_ID}"
 
-# Same order as FreeRADIUS inner-tunnel (mail address, not DN).
-for BIND_AS in "${USER_MAIL}"; do
-	[ -z "${BIND_AS}" ] && continue
-	if try_bind "${BIND_AS}"; then
-		echo ""
-		echo "OK: password accepted for ${USER}"
-		exit 0
-	fi
-done
+BIND_OUT="$(ldap_cmd -D "${RADIUS_BIND_ID}" -w "${PASS}" -b "${BASE_DN}" -s base '(objectClass=*)' dn 2>&1)" || BIND_RC=$?
+BIND_RC="${BIND_RC:-0}"
 
+if [ "${BIND_RC}" -eq 0 ] && ! echo "${BIND_OUT}" | grep -qiE 'Invalid credentials|ldap_bind:.*(49|50)|AcceptSecurityContext'; then
+	echo "${BIND_OUT}"
+	echo ""
+	echo "OK: password accepted for ${USER}"
+	echo "(Successful bind returns the domain entry: dn: ${BASE_DN})"
+	exit 0
+fi
+
+echo "${BIND_OUT}"
 echo ""
-echo "FAIL: Google LDAP rejected the password for ${USER_MAIL}."
+echo "FAIL: Google LDAP rejected the password for ${RADIUS_BIND_ID}."
+echo ""
+echo "This is the same identity FreeRADIUS uses. If this fails, WiFi will fail too."
 echo ""
 echo "Check:"
-echo "  1. Sign in at https://mail.google.com with the same password"
-echo "  2. Admin > LDAP > Access permissions on user's OU:"
-echo "     'Verify user credentials' (not just Read)"
-echo "  3. If password was just changed, wait 10 minutes and retry"
+echo "  1. Sign in at https://mail.google.com as ${RADIUS_BIND_ID}"
+echo "  2. Admin > LDAP > OU permissions: Read + Verify user credentials"
+echo "  3. After admin password reset, user must log in to Gmail once first"
+echo "  4. Avoid special shell chars when typing; try:"
+echo "       LDAP_TEST_PASSWORD='yourpass' ./scripts/ldap-test-bind.sh ${USER}"
 exit 1

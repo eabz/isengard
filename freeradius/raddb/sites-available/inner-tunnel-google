@@ -29,43 +29,48 @@ server inner-tunnel {
 		# Do not run suffix here; username is already normalized above.
 
 		# Google LDAP: one simple filter per domain (OR filters fail on ldap.google.com).
-		# Bind as mail address — Google rejects DN bind for secondary-domain users.
+		# Bind as mail — Google rejects DN bind for secondary-domain users.
 		ldap_find_cedros {
-			if (ok) {
+			ok {
 				update control {
 					&LDAP-UserDn := "%{User-Name}@cedrosnorte.edu.mx"
 				}
+				update request {
+					&LDAP-UserDn := "%{User-Name}@cedrosnorte.edu.mx"
+				}
+				ok = return
 			}
-			ok = return
 		}
 		ldap_find_colegios {
-			if (ok) {
+			ok {
 				update control {
 					&LDAP-UserDn := "%{User-Name}@colegios-cedros-paseo.mx"
 				}
+				update request {
+					&LDAP-UserDn := "%{User-Name}@colegios-cedros-paseo.mx"
+				}
+				ok = return
 			}
-			ok = return
 		}
 		ldap_find_uid {
-			if (ok) {
+			ok {
 				update control {
 					&LDAP-UserDn := &reply:mail
 				}
+				update request {
+					&LDAP-UserDn := &reply:mail
+				}
+				ok = return
 			}
-			ok = return
 		}
 
 		update control {
 			&Proxy-To-Realm := LOCAL
 		}
 
-		eap {
-			ok = return
-		}
-
-		if (&User-Password && !control:Auth-Type) {
+		if (&User-Password) {
 			update control {
-				&Auth-Type := ldap
+				&Auth-Type := LDAP
 			}
 		}
 
@@ -73,15 +78,13 @@ server inner-tunnel {
 	}
 
 	authenticate {
-		Auth-Type PAP {
-			ldap_google
-		}
-
 		Auth-Type LDAP {
 			ldap_google
 		}
 
-		eap
+		Auth-Type PAP {
+			ldap_google
+		}
 	}
 
 	session {
