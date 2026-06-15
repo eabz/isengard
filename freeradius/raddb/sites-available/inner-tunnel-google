@@ -12,9 +12,21 @@ server inner-tunnel {
 	authorize {
 		filter_username
 		filter_inner_identity
-		google_ldap_strip_username
 
-		# Do not run suffix here; google_ldap_strip_username normalizes all domains.
+		# Inline (policy.d/google-ldap is not auto-included by the stock image).
+		# WiFi identity: username only, e.g. jpsanchez for any @domain.
+		if (&User-Name =~ /^([^@]+)@/) {
+			update request {
+				&User-Name := "%{tolower:%{1}}"
+			}
+		}
+		else {
+			update request {
+				&User-Name := "%{tolower:%{User-Name}}"
+			}
+		}
+
+		# Do not run suffix here; username is already normalized above.
 
 		update control {
 			&Proxy-To-Realm := LOCAL

@@ -35,8 +35,8 @@ ldap ldap_google {
 	user {
 		# Search entire domain tree (colegios users may live outside ou=Users).
 		base_dn = "${..base_dn}"
-		# uid for most users; mail on both domains for secondary-domain accounts.
-		filter = "(|(uid=%{Stripped-User-Name})(mail=%{Stripped-User-Name}@cedrosnorte.edu.mx)(mail=%{Stripped-User-Name}@colegios-cedros-paseo.mx))"
+		# uid for most users; mail on both Workspace domains.
+		filter = "(|(uid=%{User-Name})(mail=%{User-Name}@cedrosnorte.edu.mx)(mail=%{User-Name}@colegios-cedros-paseo.mx))"
 		scope = 'sub'
 	}
 
