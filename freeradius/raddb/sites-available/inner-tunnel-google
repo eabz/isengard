@@ -41,15 +41,14 @@ server inner-tunnel {
 		}
 
 		# colegios-cedros-paseo.mx: mail bind before cedros uid/DN path in ldap_google
-		ldap_find_colegios {
-			notfound = ok
-			ok {
-				update request {
-					&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
-				}
-				update control {
-					&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
-				}
+		ldap_find_colegios
+
+		if (ok) {
+			update request {
+				&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
+			}
+			update control {
+				&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
 			}
 		}
 
