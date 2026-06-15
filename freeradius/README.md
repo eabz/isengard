@@ -31,27 +31,29 @@ password hash) — which is why the inner method must be **PAP**.
 
 | File | Purpose |
 |------|---------|
-| `raddb/mods-available/ldap_google` | Two LDAP instances: `ldap_google` (uid) + `ldap_colegios` (mail). Put credentials in **both**. |
+| `raddb/mods-available/ldap_google` | Two LDAP instances: `ldap_google` (uid) + `ldap_colegios` (mail). Credentials come from `.env`. |
 | `raddb/sites-available/default` | Outer server (APs talk here). EAP only. Sets long `Session-Timeout`. |
 | `raddb/sites-available/inner-tunnel` | Inner tunnel: normalize uid, uid→mail lookup, LDAP bind. |
 | `raddb/mods-available/eap` | EAP-TTLS + PAP, TLS session cache, points at `certs/eap/`. |
-| `raddb/clients.conf` | APs + loopback test clients. |
+| `raddb/clients.conf` | APs + loopback test clients. AP secret comes from `.env`. |
 | `stunnel/google-ldap.conf` | TLS proxy to `ldap.google.com:636`. |
 | `docker-entrypoint.sh` | Enables the LDAP module, makes the EAP cert, starts stunnel, validates, runs. |
 
+All secrets live in `.env` (gitignored) and are read by the config via
+`${ENV:…}`, so `git pull` never conflicts on credentials.
+
 ## Setup
 
-1. **Google LDAP credentials** — edit `raddb/mods-available/ldap_google` and set
-   `identity` + `password` (Google Admin → Apps → LDAP → client → access
-   credentials) in **both** the `ldap_google` and `ldap_colegios` blocks. Keep
-   `base_dn = dc=cedrosnorte,dc=edu,dc=mx`.
+1. **Env / secrets** — copy `.env.example` to `.env` and set:
+   - `HOST_BIND_IP`, `RADIUS_HOSTNAME`
+   - `RADIUS_CLIENT_SECRET` — the shared secret your APs use
+   - `GOOGLE_LDAP_IDENTITY` / `GOOGLE_LDAP_PASSWORD` — Google Admin → Apps →
+     LDAP → client → access credentials
 2. **Google client cert** — put `ldap-client.crt` + `ldap-client.key` in
    `raddb/certs/google/`.
-3. **Env** — copy `.env.example` to `.env`, set `HOST_BIND_IP` and
-   `RADIUS_HOSTNAME`.
-4. **AP secret** — set the same secret in `raddb/clients.conf` (`local_lan`) and
-   on your access points.
-5. **Run**:
+3. **base_dn** — stays in `raddb/mods-available/ldap_google`
+   (`dc=cedrosnorte,dc=edu,dc=mx`); no need to change it.
+4. **Run**:
    ```bash
    docker compose up -d --build
    docker logs freeradius --tail 30      # expect "Configuration OK"
