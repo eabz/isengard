@@ -32,7 +32,15 @@ eap {
 		private_key_file = /etc/raddb/certs/eap/server.key
 		ca_file = /etc/raddb/certs/eap/ca.pem
 
-		fragment_size = 1024
+		# Keep each EAP-TLS fragment under the client link MTU. The APs here
+		# advertise Framed-MTU = 1002, but fragment_size = 1024 made the server
+		# emit ~1008-byte EAP frames — larger than 1002 — and some clients
+		# (older Windows / certain drivers) then can't reassemble the server
+		# Certificate, so they stall right after it and loop connect/disconnect
+		# forever (never completing, so no TLS session ever gets cached). 970
+		# stays safely under 1002 with headroom for EAP/RADIUS overhead. Raise
+		# toward 1000 only if every client is happy; lower if any still stall.
+		fragment_size = 970
 		include_length = yes
 
 		# Force modern TLS; phones and laptops all support 1.2.
