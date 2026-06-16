@@ -31,6 +31,13 @@ server inner-tunnel {
 			update request {
 				&Stripped-User-Name := "%{tolower:%{User-Name}}"
 			}
+			# No realm typed: default to the primary domain so the colegios
+			# check below is always a clean string compare. Referencing an UNSET
+			# &control:Tmp-String-0 in the if() throws "Failed retrieving values
+			# required to evaluate condition" on every bare-username login.
+			update control {
+				&Tmp-String-0 := "cedrosnorte.edu.mx"
+			}
 		}
 
 		# Find the user FIRST (before eap), so the bind identity is ready whether
