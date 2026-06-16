@@ -17,10 +17,14 @@ server inner-tunnel {
 		filter_username
 
 		# Username only: accept "jpsanchez" or "jpsanchez@<anydomain>" and reduce
-		# to the bare lowercase uid that Google LDAP indexes.
-		if (&User-Name =~ /^([^@]+)@/) {
+		# to the bare lowercase uid that Google LDAP indexes. Also remember the
+		# realm the user typed (lowercased) so we can disambiguate collisions.
+		if (&User-Name =~ /^([^@]+)@(.+)$/) {
 			update request {
 				&Stripped-User-Name := "%{tolower:%{1}}"
+			}
+			update control {
+				&Tmp-String-0 := "%{tolower:%{2}}"
 			}
 		}
 		else {
@@ -33,12 +37,30 @@ server inner-tunnel {
 		# the phone uses plain PAP or inner EAP-GTC.
 		#   cedrosnorte : found by uid  -> bind as the DN
 		#   colegios    : found by mail -> bind as the email (DN bind returns 49)
-		ldap_google
-		if (notfound) {
+		#
+		# Username collisions: the SAME username can be two DIFFERENT people
+		# (uid=<user> in cedrosnorte vs mail=<user>@colegios-cedros-paseo.mx). A
+		# colegios user who collides with a cedros uid MUST log in as
+		# user@colegios-cedros-paseo.mx; we then skip the uid search and bind as
+		# the email, so we never match the other (cedros) person. Bare usernames
+		# and @cedrosnorte.edu.mx keep the uid-first behavior, and non-colliding
+		# colegios users still work via the notfound fallback below.
+		if (&control:Tmp-String-0 == "colegios-cedros-paseo.mx") {
 			ldap_colegios
 			if (ok || updated) {
 				update control {
 					&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
+				}
+			}
+		}
+		else {
+			ldap_google
+			if (notfound) {
+				ldap_colegios
+				if (ok || updated) {
+					update control {
+						&LDAP-UserDn := "%{tolower:%{Stripped-User-Name}}@colegios-cedros-paseo.mx"
+					}
 				}
 			}
 		}
