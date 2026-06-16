@@ -51,9 +51,10 @@ server default {
 
 	post-auth {
 		# Long time between full reauthentications, with seamless in-place reauth.
-		# Raise 86400 (24h) if you want even longer; pair with the EAP TLS cache.
+		# 172800 = 2 days; keep the EAP TLS cache lifetime (mods-available/eap) at
+		# least this long so the reauth resumes instead of doing a full handshake.
 		update reply {
-			&Session-Timeout := 86400
+			&Session-Timeout := 172800
 			&Termination-Action := RADIUS-Request
 		}
 

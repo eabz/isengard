@@ -39,11 +39,15 @@ eap {
 		tls_min_version = "1.2"
 		tls_max_version = "1.2"
 
-		# Session resumption: lets devices reconnect without a full handshake
-		# (and without re-hitting LDAP), so long reauth windows stay cheap.
+		# Session resumption: a reauth/reconnect reuses the cached TLS session,
+		# skipping BOTH the full handshake and the inner LDAP bind — so reauth is
+		# instant and never drops the client. max_entries must be >= the number of
+		# devices on the network, or sessions get evicted and fall back to a slow
+		# full reauth (the usual cause of reauth disconnects). Default is only 255.
 		cache {
 			enable = yes
-			lifetime = 24    # hours
+			lifetime = 48      # hours (>= Session-Timeout, which is 2 days)
+			max_entries = 16384
 		}
 
 		verify {
