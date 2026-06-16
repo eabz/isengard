@@ -46,10 +46,14 @@ ldap ldap_google {
 	# Keep connections to Google warm so a full auth doesn't pay a fresh TLS
 	# handshake to ldap.google.com every time.
 	pool {
-		start = 4
-		min = 2
-		max = 16
-		spare = 4
+		# Sized for bell-time bursts with a cold TLS cache (~300 users): every
+		# full login does an LDAP search + a bind-as-user from this pool, so max
+		# caps concurrent full auths. Keep the combined google+colegios max under
+		# Google Secure LDAP's per-client connection limit (Admin > Apps > LDAP).
+		start = 8
+		min = 4
+		max = 48
+		spare = 8
 		uses = 0
 		retry_delay = 30
 		lifetime = 0
@@ -83,10 +87,12 @@ ldap ldap_colegios {
 	}
 
 	pool {
-		start = 1
-		min = 1
-		max = 8
-		spare = 2
+		# Smaller than ldap_google (only colegios users hit this), but still wide
+		# enough for a burst. Counts against the same Google per-client limit.
+		start = 2
+		min = 2
+		max = 24
+		spare = 4
 		uses = 0
 		retry_delay = 30
 		lifetime = 0
