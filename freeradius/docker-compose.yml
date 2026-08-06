@@ -36,6 +36,18 @@ services:
       - ./raddb/sites-available/inner-tunnel:/etc/freeradius/sites-available/inner-tunnel:ro
       - ./raddb/clients.conf:/etc/raddb/clients.conf:ro
       - ./raddb/clients.conf:/etc/freeradius/clients.conf:ro
+    networks:
+      - radius_test
+
+networks:
+  # Fixed subnet so clients.conf's docker_bridge client can be pinned to an
+  # exact range instead of the whole 172.16.0.0/12 RFC1918 block. Only used
+  # for host-side test traffic (scripts/radius-debug.sh, manual radclient
+  # tests against the published port) — real APs go in over local_lan.
+  radius_test:
+    ipam:
+      config:
+        - subnet: 172.30.238.0/24
 
 volumes:
   freeradius-logs:

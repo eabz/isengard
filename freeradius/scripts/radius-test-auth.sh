@@ -4,7 +4,7 @@
 # EAP-TTLS tunnel, without needing an EAP supplicant. (Full WiFi = the phone.)
 #
 # Runs from inside the container, so the request comes from 127.0.0.1
-# (client localhost, secret testing123).
+# (client localhost, secret RADIUS_TEST_SECRET from .env).
 #
 # Usage:
 #   LDAP_TEST_PASSWORD='pass' ./scripts/radius-test-auth.sh eberrueta
@@ -40,7 +40,7 @@ pass=$(printf "%s" "$pass" | sed "s/\"/\\\\\"/g")
 printf "User-Name = %s\nUser-Password = \"%s\"\n" "$user" "$pass" > /tmp/radtest.txt
 echo "--- request ---"; cat /tmp/radtest.txt
 echo "--- response ---"
-radclient -x 127.0.0.1:18120 auth testing123 -f /tmp/radtest.txt 2>&1
+radclient -x 127.0.0.1:18120 auth "${RADIUS_TEST_SECRET:-testing123}" -f /tmp/radtest.txt 2>&1
 rc=$?
 rm -f /tmp/radtest.txt
 exit $rc

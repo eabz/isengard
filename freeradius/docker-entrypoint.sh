@@ -26,8 +26,17 @@ if [ "${RADIUS_CLIENT_SECRET}" = "CHANGE_ME" ]; then
 	echo "WARNING: RADIUS_CLIENT_SECRET not set in .env (using CHANGE_ME); APs will not authenticate." >&2
 fi
 
+# Test-only clients (clients.conf: localhost + docker_bridge). Never used by
+# real APs; default keeps scripts/radius-test-auth.sh etc. working out of the box.
+: "${RADIUS_TEST_SECRET:=testing123}"
+export RADIUS_TEST_SECRET
+
 # --- Enable the Google LDAP module -----------------------------------------
 ln -sf ../mods-available/ldap_google "${RADDB}/mods-enabled/ldap_google"
+
+# --- Enable the inner-identity linelog module -------------------------------
+ln -sf ../mods-available/linelog_inner "${RADDB}/mods-enabled/linelog_inner"
+mkdir -p /var/log/freeradius/inner-identity
 
 # --- EAP server certificate -------------------------------------------------
 # Use a real cert in certs/eap/ (see scripts/issue-eap-cert.sh). If none exists,
@@ -66,6 +75,7 @@ for u in freerad freeradius radiusd; do
 done
 if [ -n "${FR_USER}" ]; then
 	chown -R "${FR_USER}":"${FR_USER}" "${EAPDIR}" 2>/dev/null || true
+	chown -R "${FR_USER}":"${FR_USER}" /var/log/freeradius/inner-identity 2>/dev/null || true
 fi
 chmod 750 "${EAPDIR}" 2>/dev/null || true
 chmod 640 "${EAPDIR}/server.key" 2>/dev/null || true

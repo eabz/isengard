@@ -43,7 +43,7 @@ while [ $i -lt 40 ]; do
 	sleep 0.5; i=$((i+1))
 done
 
-radclient -x 127.0.0.1:18120 auth testing123 -f /tmp/t > /tmp/rc.log 2>&1 || true
+radclient -x 127.0.0.1:18120 auth "${RADIUS_TEST_SECRET:-testing123}" -f /tmp/t > /tmp/rc.log 2>&1 || true
 sleep 1
 
 echo "==================== radclient ===================="

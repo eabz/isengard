@@ -1,0 +1,492 @@
+#!/usr/bin/env python3
+"""Attribute a NextDNS query (domain + time, or IP + time) to a real user.
+
+Chain (see README.md "Attributing NextDNS logs to users"):
+
+    NextDNS log (device IP + timestamp)
+        -> radacct detail files   (Framed-IP-Address, time-bounded)  -> Calling-Station-Id
+        -> inner-identity linelog (Calling-Station-Id, time-bounded) -> fully-qualified identity
+
+Why this exists at all: ~35% of clients send a non-routable outer EAP
+identity ("anonymous"/"anonimo"), so the RADIUS *accounting* record's
+User-Name is useless. The real identity only ever appears in the
+inner-tunnel's post-auth linelog (mods-available/linelog_inner), keyed by
+Calling-Station-Id (the AP-reported MAC) instead.
+
+Critical correctness rules (do not "simplify" these away):
+
+  * A session with no Acct-Stop is treated as CLOSED after 2 missed interims
+    (Acct-Interim-Interval is 600s -> 1200s of silence). We never extend a
+    session past its last observed record + that grace window. Otherwise a
+    DHCP-reassigned IP gets attributed to whoever HAD the IP before, not
+    whoever has it now.
+  * Usernames are NEVER stripped of their @domain. cedrosnorte.edu.mx and
+    colegios-cedros-paseo.mx are two different Workspace domains and the same
+    bare uid can be two different people across them (see the FreeRADIUS
+    README). The linelog always records the fully-qualified identity
+    (uid@domain) exactly as resolved by the inner-tunnel; that's what this
+    script returns, verbatim.
+
+Usage:
+    # Direct: I already know the IP and roughly when.
+    lookup_user.py --ip 10.0.12.34 --at 2026-08-06T14:32:00
+
+    # Indirect: I only know a domain and a time range; ask NextDNS for the
+    # device IP(s) that queried it, then resolve each to a user.
+    lookup_user.py --domain doubleclick.net --since 2026-08-06T14:00:00 \\
+        --until 2026-08-06T15:00:00
+
+Run this INSIDE the freeradius container (where the log volume is mounted and
+the clock matches the logs):
+    docker exec freeradius lookup_user.py --ip 10.0.12.34 --at 2026-08-06T14:32:00
+"""
+import argparse
+import glob
+import json
+import os
+import sys
+from datetime import datetime, timedelta
+from urllib import error, parse, request
+
+# Must match sites-available/default's &Acct-Interim-Interval.
+INTERIM_INTERVAL = 600
+# "2 missed interims" -> a session goes silent for this long and we consider
+# it closed, even with no Acct-Stop.
+MISSED_INTERIMS_GRACE = 2 * INTERIM_INTERVAL
+
+# How many days of detail/linelog files to load around the query date. Needs
+# to cover the longest a session or a cached-TLS reauth gap can plausibly be:
+# Session-Timeout is 172800s (2 days), EAP TLS cache lifetime is 48h — 3 days
+# of lookback covers both with room to spare. Widen with --lookback-days if a
+# lookup comes back empty and you suspect a longer gap.
+DEFAULT_LOOKBACK_DAYS = 3
+
+RADACCT_ROOT = os.environ.get("RADACCT_ROOT", "/var/log/freeradius/radacct")
+LINELOG_ROOT = os.environ.get("LINELOG_ROOT", "/var/log/freeradius/inner-identity")
+
+
+# --------------------------------------------------------------------------
+# Time helpers
+#
+# Everything below assumes the script runs with the SAME local timezone as
+# the FreeRADIUS container that wrote the logs (detail file headers and the
+# linelog's %T are both local time, not UTC). Naive timestamps you pass in
+# are interpreted the same way.
+# --------------------------------------------------------------------------
+
+def parse_user_time(s):
+    """Accept a unix epoch (int) or an ISO-8601 string (naive = local time)."""
+    s = s.strip()
+    if s.isdigit():
+        return int(s)
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    return datetime.fromisoformat(s).timestamp()
+
+
+def iso(ts):
+    if ts is None:
+        return None
+    return datetime.fromtimestamp(ts).isoformat(sep=" ", timespec="seconds")
+
+
+def date_range(ts, lookback_days):
+    """Date strings (YYYYMMDD) from ts-lookback_days through ts+1 day.
+
+    The +1 day covers a session/log line written just after local midnight
+    for an event that happened just before it (detail files roll at
+    midnight; a session can straddle two dated files).
+    """
+    base = datetime.fromtimestamp(ts).date()
+    days = [base - timedelta(days=i) for i in range(lookback_days, 0, -1)]
+    days.append(base)
+    days.append(base + timedelta(days=1))
+    return [d.strftime("%Y%m%d") for d in days]
+
+
+# --------------------------------------------------------------------------
+# radacct detail file parsing
+# --------------------------------------------------------------------------
+
+def _parse_detail_file(path):
+    """Yield one dict per accounting record block in a detail-YYYYMMDD file."""
+    try:
+        f = open(path, "r", errors="replace")
+    except OSError:
+        return
+    with f:
+        block = []
+        for line in f:
+            if line.strip() == "":
+                if block:
+                    yield _block_to_dict(block)
+                    block = []
+                continue
+            block.append(line)
+        if block:
+            yield _block_to_dict(block)
+
+
+def _block_to_dict(lines):
+    rec = {"_header": lines[0].strip()}
+    for line in lines[1:]:
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k = k.strip().lstrip("&")
+        v = v.strip()
+        if v.startswith('"') and v.endswith('"') and len(v) >= 2:
+            v = v[1:-1]
+        rec[k] = v
+    return rec
+
+
+def _record_epoch(rec):
+    """FreeRADIUS appends a 'Timestamp = <epoch>' line to every detail
+    record; prefer that. Fall back to the ctime header line (e.g.
+    'Wed Jun 26 20:53:47 2019') if it's ever missing."""
+    if "Timestamp" in rec:
+        try:
+            return int(rec["Timestamp"])
+        except ValueError:
+            pass
+    hdr = rec.get("_header")
+    if hdr:
+        try:
+            return datetime.strptime(hdr, "%a %b %d %H:%M:%S %Y").timestamp()
+        except ValueError:
+            pass
+    return None
+
+
+def iter_nas_dirs(radacct_root):
+    for d in sorted(glob.glob(os.path.join(radacct_root, "*"))):
+        if os.path.isdir(d):
+            yield d
+
+
+def load_records(nas_dir, dates):
+    records = []
+    for d in dates:
+        path = os.path.join(nas_dir, f"detail-{d}")
+        for rec in _parse_detail_file(path):
+            ts = _record_epoch(rec)
+            if ts is None:
+                continue
+            rec["_ts"] = ts
+            records.append(rec)
+    return records
+
+
+def build_sessions(records):
+    """Group accounting records by Acct-Session-Id and reconstruct the
+    covered [start, end] interval for each, applying the "closed after 2
+    missed interims" rule. Returns a list of session dicts."""
+    by_id = {}
+    for rec in records:
+        sid = rec.get("Acct-Session-Id")
+        if not sid:
+            continue
+        by_id.setdefault(sid, []).append(rec)
+
+    sessions = []
+    for sid, recs in by_id.items():
+        recs.sort(key=lambda r: r["_ts"])
+        cur = None
+        for rec in recs:
+            ts = rec["_ts"]
+            status = rec.get("Acct-Status-Type", "")
+            if cur is None:
+                cur = _new_session(sid, rec, ts)
+            else:
+                gap = ts - cur["last_seen"]
+                if gap > MISSED_INTERIMS_GRACE and cur["end"] is None:
+                    # Silence exceeded 2 missed interims: force-close here,
+                    # do NOT extend coverage up to this later record.
+                    cur["end"] = cur["last_seen"] + MISSED_INTERIMS_GRACE
+                    cur["closed_reason"] = "timeout"
+                    sessions.append(cur)
+                    # Same Acct-Session-Id reappearing after a >20min silent
+                    # gap is anomalous (session ids are meant to be unique
+                    # per session) — treat it as a new, separate interval
+                    # under the same id rather than silently merging.
+                    cur = _new_session(sid, rec, ts)
+                    cur["note"] = "reopened after a timeout gap under the same Acct-Session-Id"
+                cur["framed_ip"] = rec.get("Framed-IP-Address", cur["framed_ip"])
+                cur["calling_station_id"] = rec.get("Calling-Station-Id", cur["calling_station_id"])
+                cur["last_seen"] = ts
+            if status == "Stop":
+                cur["end"] = ts
+                cur["closed_reason"] = "stop"
+                sessions.append(cur)
+                cur = None
+        if cur is not None:
+            # No Acct-Stop in the loaded window: close it 2 missed interims
+            # after the last thing we actually heard from it.
+            cur["end"] = cur["last_seen"] + MISSED_INTERIMS_GRACE
+            cur["closed_reason"] = "no-stop-seen (closed after missed-interim grace)"
+            sessions.append(cur)
+    return sessions
+
+
+def _new_session(sid, rec, ts):
+    return {
+        "session_id": sid,
+        "start": ts,
+        "last_seen": ts,
+        "end": None,
+        "framed_ip": rec.get("Framed-IP-Address"),
+        "calling_station_id": rec.get("Calling-Station-Id"),
+        "closed_reason": None,
+    }
+
+
+def find_sessions_for_ip(ip, ts, radacct_root, lookback_days):
+    dates = date_range(ts, lookback_days)
+    matches = []
+    for nas_dir in iter_nas_dirs(radacct_root):
+        records = load_records(nas_dir, dates)
+        if not records:
+            continue
+        for s in build_sessions(records):
+            if s["framed_ip"] == ip and s["start"] <= ts <= s["end"]:
+                s["nas"] = os.path.basename(nas_dir)
+                matches.append(s)
+    return matches
+
+
+# --------------------------------------------------------------------------
+# inner-identity linelog parsing
+# --------------------------------------------------------------------------
+
+def parse_linelog_timestamp(ts_str):
+    # Must match mods-available/linelog_inner's format = "%T\t...".
+    return datetime.strptime(ts_str, "%Y-%m-%d-%H:%M:%S.%f").timestamp()
+
+
+def find_identity(calling_station_id, ref_ts, linelog_root, lookback_days):
+    """Latest linelog entry for this MAC at or before ref_ts (small forward
+    slack for clock skew between the Access-Accept and the Acct-Start).
+    Deliberately does NOT restrict to a tight window before ref_ts: the EAP
+    TLS session cache (48h) means a device can go a long time between full
+    inner-tunnel authentications, so the matching linelog line can be well
+    before the session it's being matched against."""
+    dates = date_range(ref_ts, lookback_days)
+    slack = 60
+    best = None
+    for d in dates:
+        path = os.path.join(linelog_root, f"inner-identity-{d}.log")
+        try:
+            f = open(path, "r", errors="replace")
+        except OSError:
+            continue
+        with f:
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) != 3:
+                    continue
+                ts_str, csid, identity = parts
+                if csid.lower() != calling_station_id.lower():
+                    continue
+                try:
+                    ts_val = parse_linelog_timestamp(ts_str)
+                except ValueError:
+                    continue
+                if ts_val <= ref_ts + slack and (best is None or ts_val > best[0]):
+                    best = (ts_val, identity)
+    return best
+
+
+# --------------------------------------------------------------------------
+# NextDNS Logs API (domain + range -> device IP + timestamp events)
+#
+# NOTE ON RELIABILITY: this hits the NextDNS Logs API and picks the client-IP
+# field out of the response. The exact JSON field name has not been verified
+# against a live response in this environment — run once with --dump-raw and
+# adjust _extract_ip()'s candidate key list below if it comes back empty.
+# --------------------------------------------------------------------------
+
+_IP_KEYS = [
+    ("device", "ip"),
+    ("client_ip",),
+    ("clientIp",),
+    ("device_ip",),
+    ("deviceIp",),
+    ("remote_ip",),
+]
+
+
+def _dig(d, path):
+    cur = d
+    for k in path:
+        if not isinstance(cur, dict) or k not in cur:
+            return None
+        cur = cur[k]
+    return cur
+
+
+def _extract_ip(item):
+    for path in _IP_KEYS:
+        v = _dig(item, path)
+        if v:
+            return v
+    return None
+
+
+def nextdns_query_events(domain, since_ts, until_ts, dump_raw=False):
+    api_key = os.environ.get("NEXTDNS_API_KEY")
+    profile = os.environ.get("NEXTDNS_PROFILE_ID", "d3a5e7")
+    if not api_key:
+        sys.exit("ERROR: set NEXTDNS_API_KEY (see .env.example) to use --domain lookups.")
+
+    params = {
+        "domain": domain,
+        "from": datetime.utcfromtimestamp(since_ts).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "to": datetime.utcfromtimestamp(until_ts).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "limit": 1000,
+    }
+    url = f"https://api.nextdns.io/profiles/{profile}/logs?" + parse.urlencode(params)
+    req = request.Request(url, headers={"X-Api-Key": api_key})
+    try:
+        with request.urlopen(req, timeout=20) as resp:
+            body = resp.read()
+    except error.HTTPError as e:
+        sys.exit(f"ERROR: NextDNS API request failed: {e.code} {e.reason}\n{e.read().decode(errors='replace')}")
+    except error.URLError as e:
+        sys.exit(f"ERROR: could not reach the NextDNS API: {e.reason}")
+
+    data = json.loads(body)
+    if dump_raw:
+        print(json.dumps(data, indent=2)[:4000], file=sys.stderr)
+
+    rows = data.get("data", data if isinstance(data, list) else [])
+    events = []
+    for item in rows:
+        ip = _extract_ip(item)
+        ts_raw = item.get("timestamp")
+        if not ip or not ts_raw:
+            continue
+        try:
+            ts_str = ts_raw[:-1] + "+00:00" if ts_raw.endswith("Z") else ts_raw
+            ts_val = datetime.fromisoformat(ts_str).timestamp()
+        except ValueError:
+            continue
+        events.append({"ip": ip, "ts": ts_val})
+
+    if not events:
+        print(
+            "NOTE: no matching NextDNS rows, or the response JSON shape didn't match "
+            "what this script expects. Re-run with --dump-raw to inspect the real "
+            "response and fix _IP_KEYS in scripts/lookup_user.py if needed.",
+            file=sys.stderr,
+        )
+    return events
+
+
+# --------------------------------------------------------------------------
+# Resolution
+# --------------------------------------------------------------------------
+
+def resolve(ip, ts, radacct_root, linelog_root, lookback_days):
+    sessions = find_sessions_for_ip(ip, ts, radacct_root, lookback_days)
+    result = {"ip": ip, "timestamp": iso(ts)}
+
+    if not sessions:
+        result.update(user=None, reason="no accounting session covers this IP at this time")
+        return result
+
+    if len(sessions) > 1:
+        result["warning"] = (
+            f"{len(sessions)} overlapping sessions matched this IP/time — "
+            "reporting the first; treat this lookup as unreliable"
+        )
+
+    s = sessions[0]
+    result.update(
+        calling_station_id=s["calling_station_id"],
+        session_id=s["session_id"],
+        session_start=iso(s["start"]),
+        session_end=iso(s["end"]),
+        session_closed_reason=s["closed_reason"],
+        nas=s["nas"],
+    )
+
+    if not s["calling_station_id"]:
+        result.update(user=None, reason="session has no Calling-Station-Id recorded")
+        return result
+
+    found = find_identity(s["calling_station_id"], s["start"], linelog_root, lookback_days)
+    if not found:
+        result.update(
+            user=None,
+            reason=(
+                "no inner-identity linelog entry for this MAC at/before session start "
+                "(device may have used a cached TLS session older than --lookback-days, "
+                "or never completed a full inner-tunnel authentication)"
+            ),
+        )
+        return result
+
+    _, identity = found
+    result["user"] = identity
+    return result
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    mode = ap.add_argument_group("lookup mode (pick one)")
+    mode.add_argument("--ip", help="Framed-IP-Address to look up")
+    mode.add_argument("--at", help="timestamp for --ip (epoch or ISO-8601, local time)")
+    mode.add_argument("--domain", help="domain to look up via the NextDNS Logs API")
+    mode.add_argument("--since", help="range start for --domain (epoch or ISO-8601)")
+    mode.add_argument("--until", help="range end for --domain (epoch or ISO-8601)")
+
+    ap.add_argument("--radacct-root", default=RADACCT_ROOT)
+    ap.add_argument("--linelog-root", default=LINELOG_ROOT)
+    ap.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
+    ap.add_argument("--dump-raw", action="store_true", help="dump the raw NextDNS API response to stderr")
+    ap.add_argument("--json", action="store_true", help="emit JSON instead of a text table")
+    args = ap.parse_args()
+
+    if args.domain:
+        if not (args.since and args.until):
+            ap.error("--domain requires --since and --until")
+        since_ts = parse_user_time(args.since)
+        until_ts = parse_user_time(args.until)
+        events = nextdns_query_events(args.domain, since_ts, until_ts, dump_raw=args.dump_raw)
+        results = []
+        for ev in events:
+            r = resolve(ev["ip"], ev["ts"], args.radacct_root, args.linelog_root, args.lookback_days)
+            r["domain"] = args.domain
+            r["nextdns_timestamp"] = iso(ev["ts"])
+            results.append(r)
+    elif args.ip and args.at:
+        ts = parse_user_time(args.at)
+        results = [resolve(args.ip, ts, args.radacct_root, args.linelog_root, args.lookback_days)]
+    else:
+        ap.error("provide --domain with --since/--until, or --ip with --at")
+        return
+
+    if args.json:
+        print(json.dumps(results, indent=2))
+    else:
+        for r in results:
+            print("-" * 60)
+            for k in (
+                "domain", "nextdns_timestamp", "ip", "timestamp", "user", "reason", "warning",
+                "calling_station_id", "session_id", "session_start", "session_end",
+                "session_closed_reason", "nas",
+            ):
+                if r.get(k) is not None:
+                    print(f"{k:22} {r[k]}")
+
+
+if __name__ == "__main__":
+    main()

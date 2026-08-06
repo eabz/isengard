@@ -1,0 +1,38 @@
+# Records the REAL inner identity resolved against Google LDAP, keyed by the
+# Calling-Station-Id (AP-reported MAC) — the only place the fully-qualified
+# identity and the MAC are ever seen together.
+#
+# Why this exists: ~35% of clients send a non-routable outer EAP identity
+# ("anonymous"/"anonimo"), so the RADIUS *accounting* record (what NextDNS
+# lookups ultimately have to join against, via Framed-IP-Address) never carries
+# a usable User-Name. scripts/lookup_user.py instead joins:
+#   NextDNS log (device IP + time) -> radacct detail (Framed-IP -> Calling-Station-Id)
+#   -> this linelog (Calling-Station-Id -> fully-qualified identity)
+#
+# One line per successful inner authentication (called from inner-tunnel
+# post-auth, so only on Access-Accept — never for rejects):
+#   <timestamp>\t<calling-station-id>\t<uid>@<domain>
+#
+# The identity is ALWAYS written fully-qualified (uid@cedrosnorte.edu.mx or
+# uid@colegios-cedros-paseo.mx) — see inner-tunnel's authorize section, which
+# sets &control:Tmp-String-0 to the resolved domain even for bare-username
+# logins. Never strip the @ downstream: the same bare uid can be two different
+# people across the two Workspace domains.
+#
+# filename is date-stamped like radacct/<nas-ip>/detail-YYYYMMDD, so retention
+# is a plain file-age cleanup (scripts/rotate-logs.sh) — no in-place log
+# rotation needed, and no directory fragmentation to worry about (single
+# stream, not per-NAS).
+linelog inner_identity_log {
+	filename = /var/log/freeradius/inner-identity/inner-identity-%Y%m%d.log
+
+	# %T = "yyyy-mm-dd-hh:mm:ss.uuuuuu" (local server time). Kept in that
+	# exact format because scripts/lookup_user.py parses it with
+	# strptime("%Y-%m-%d-%H:%M:%S.%f").
+	format = "%T\t%{Calling-Station-Id}\t%{Stripped-User-Name}@%{control:Tmp-String-0}"
+
+	syslog_facility = daemon
+	syslog_severity = info
+
+	permissions = 0640
+}

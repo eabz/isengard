@@ -103,6 +103,12 @@ server inner-tunnel {
 	}
 
 	post-auth {
+		# Record the real, fully-qualified identity against the MAC — only on
+		# accept (this block is skipped for Post-Auth-Type REJECT below). This
+		# is the only place the outer "anonymous" identity and the real LDAP
+		# identity are ever seen together; see mods-available/linelog_inner.
+		inner_identity_log
+
 		Post-Auth-Type REJECT {
 			attr_filter.access_reject
 		}

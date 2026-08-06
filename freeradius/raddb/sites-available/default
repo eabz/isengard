@@ -56,6 +56,13 @@ server default {
 		update reply {
 			&Session-Timeout := 172800
 			&Termination-Action := RADIUS-Request
+
+			# Interim-Update every 10 min (was left to the NAS default, 3600s).
+			# Tighter interims bound how stale a Framed-IP-Address<->session
+			# mapping can be, and let scripts/lookup_user.py detect a dead
+			# session (2 missed interims = 20 min silence) instead of treating
+			# a NAS-abandoned session as open indefinitely.
+			&Acct-Interim-Interval := 600
 		}
 
 		Post-Auth-Type REJECT {

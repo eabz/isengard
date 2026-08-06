@@ -35,9 +35,12 @@ password hash) — which is why the inner method must be **PAP**.
 | `raddb/sites-available/default` | Outer server (APs talk here). EAP only. Sets long `Session-Timeout`. |
 | `raddb/sites-available/inner-tunnel` | Inner tunnel: normalize uid, uid→mail lookup, LDAP bind. |
 | `raddb/mods-available/eap` | EAP-TTLS + PAP, TLS session cache, points at `certs/eap/`. |
-| `raddb/clients.conf` | APs + loopback test clients. AP secret comes from `.env`. |
+| `raddb/mods-available/linelog_inner` | Logs the real fully-qualified identity against the MAC on every inner Access-Accept (see "Attributing NextDNS query logs to real users" below). |
+| `raddb/clients.conf` | APs + loopback/bridge test clients. AP secret comes from `.env`; test secret too. |
 | `stunnel/google-ldap.conf` | TLS proxy to `ldap.google.com:636`. |
-| `docker-entrypoint.sh` | Enables the LDAP module, makes the EAP cert, starts stunnel, validates, runs. |
+| `docker-entrypoint.sh` | Enables the LDAP + linelog modules, makes the EAP cert, starts stunnel, validates, runs. |
+| `scripts/lookup_user.py` | Domain/IP + time -> real user, via NextDNS + radacct + the inner-identity linelog. |
+| `scripts/rotate-logs.sh` | Deletes radacct/linelog files older than `LOG_RETENTION_DAYS`. |
 
 All secrets live in `.env` (gitignored) and are read by the config via
 `$ENV{…}`, so `git pull` never conflicts on credentials.
@@ -113,3 +116,84 @@ information** on that user's OU. If it fails at step 3 (bind), it's the password
 Most IoT gear can't do WPA2 Enterprise. Put them on a **separate WPA2-Personal
 SSID on an isolated VLAN**, or use **MAC auth (MAB)** on that VLAN — don't weaken
 this Enterprise SSID.
+
+## Attributing NextDNS query logs to real users
+
+**The problem:** ~35% of clients send a non-routable outer EAP identity
+("anonymous"/"anonimo"), so the RADIUS *accounting* record's `User-Name` is
+useless — but the real identity does exist, briefly, inside the EAP-TTLS
+tunnel. `mods-available/eap`'s `copy_request_to_tunnel = yes` (already the
+case here) copies outer attributes like `Calling-Station-Id` into the inner
+request, and `inner-tunnel`'s `post-auth` logs the real, fully-qualified
+identity against that MAC via a dedicated `linelog` instance
+(`mods-available/linelog_inner`), to
+`/var/log/freeradius/inner-identity/inner-identity-YYYYMMDD.log`
+(`<timestamp>\t<calling-station-id>\t<uid>@<domain>`, one line per
+Access-Accept). That file lives under the same `freeradius-logs` Docker
+volume as `radacct/`, so it persists across container restarts with no extra
+mount.
+
+**The chain `scripts/lookup_user.py` walks:**
+
+```
+NextDNS log (device IP + timestamp)
+    -> radacct detail files   (Framed-IP-Address, time-bounded)  -> Calling-Station-Id
+    -> inner-identity linelog (Calling-Station-Id, time-bounded) -> fully-qualified identity
+```
+
+Usage (run inside the container, where the log volume and the clock live):
+
+```bash
+# I know the device IP and roughly when.
+docker exec freeradius lookup_user.py --ip 10.0.12.34 --at 2026-08-06T14:32:00
+
+# I only know a domain and a time window — resolves via the NextDNS Logs API
+# first (needs NEXTDNS_API_KEY in .env), then chases each hit through RADIUS.
+docker exec freeradius lookup_user.py --domain doubleclick.net \
+    --since 2026-08-06T14:00:00 --until 2026-08-06T15:00:00
+```
+
+**Correctness rules this script enforces (don't "simplify" them away if you
+touch it):**
+
+- **A session with no `Acct-Stop` is closed after 2 missed interims**
+  (`Acct-Interim-Interval` is 600s below → 1200s / 20 min of silence). A
+  session's covered time window never extends past its last observed record
+  + that grace period. Without this, a DHCP-reassigned IP gets attributed to
+  whoever had it *before*, not whoever has it now.
+- **Usernames are never stripped of `@domain`.** `cedrosnorte.edu.mx` and
+  `colegios-cedros-paseo.mx` are two different Workspace domains, and the
+  same bare uid can be two different people across them. The linelog always
+  records the identity fully-qualified (resolved from `&control:Tmp-String-0`
+  in `inner-tunnel`, even for bare-username logins) — the script returns it
+  verbatim, never normalized.
+- Detail files are read from `radacct/<nas-ip>/detail-YYYYMMDD` across
+  **however many NAS directories exist** (the script globs them; it doesn't
+  assume a fixed count or fixed IPs).
+
+**NextDNS API caveat:** the exact JSON field name for the client IP in the
+NextDNS Logs API response hasn't been verified live in this environment.
+Run once with `--dump-raw` and adjust `_IP_KEYS` in `scripts/lookup_user.py`
+if it comes back empty. `--ip`/`--at` mode doesn't depend on this at all.
+
+## Log retention
+
+`radacct/` detail files and the inner-identity linelog are both already
+date-stamped per file, so "rotation" is just deleting old files —
+`scripts/rotate-logs.sh` (baked into the image at
+`/usr/local/bin/rotate-logs.sh`) does that, keeping `LOG_RETENTION_DAYS`
+(default 90, see `.env`) days. Schedule it from the **host's** crontab:
+
+```
+30 3 * * * docker exec freeradius rotate-logs.sh >> /var/log/freeradius-rotate.log 2>&1
+```
+
+## AP addressing: use static DHCP reservations
+
+Each AP is its own RADIUS NAS, so accounting lands in its own
+`radacct/<nas-ip>/` directory keyed by the AP's IP. If APs get **dynamic**
+DHCP leases, an AP that renews to a new IP starts a fresh, empty NAS
+directory and fragments that AP's accounting history across multiple
+directories — `lookup_user.py` still finds everything (it globs all NAS
+dirs), but it's needless fragmentation and makes manual debugging harder.
+Give every AP a **static DHCP reservation**.
