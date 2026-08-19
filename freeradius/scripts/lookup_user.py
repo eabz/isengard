@@ -195,10 +195,33 @@ def load_records(nas_dir, dates):
     return records
 
 
-def build_sessions(records):
+def interim_gap_stats(records):
+    """Observed spacing between consecutive accounting records of one session.
+
+    This exists to catch a silent, badly-misleading failure: if the real
+    interim interval is LARGER than what --interim-interval says, every long
+    session gets chopped into fragments at the grace boundary and the device
+    looks like it is reconnecting constantly. That is indistinguishable from
+    genuine WiFi instability unless you compare the two numbers.
+    """
+    by_id = {}
+    for rec in records:
+        sid = rec.get("Acct-Session-Id")
+        if sid:
+            by_id.setdefault(sid, []).append(rec["_ts"])
+    gaps = []
+    for tss in by_id.values():
+        tss.sort()
+        gaps.extend(int(b - a) for a, b in zip(tss, tss[1:]))
+    return sorted(gaps)
+
+
+def build_sessions(records, grace=None):
     """Group accounting records by Acct-Session-Id and reconstruct the
     covered [start, end] interval for each, applying the "closed after 2
     missed interims" rule. Returns a list of session dicts."""
+    if grace is None:
+        grace = MISSED_INTERIMS_GRACE
     by_id = {}
     for rec in records:
         sid = rec.get("Acct-Session-Id")
@@ -217,10 +240,10 @@ def build_sessions(records):
                 cur = _new_session(sid, rec, ts)
             else:
                 gap = ts - cur["last_seen"]
-                if gap > MISSED_INTERIMS_GRACE and cur["end"] is None:
+                if gap > grace and cur["end"] is None:
                     # Silence exceeded 2 missed interims: force-close here,
                     # do NOT extend coverage up to this later record.
-                    cur["end"] = cur["last_seen"] + MISSED_INTERIMS_GRACE
+                    cur["end"] = cur["last_seen"] + grace
                     cur["closed_reason"] = "timeout"
                     sessions.append(cur)
                     # Same Acct-Session-Id reappearing after a >20min silent
@@ -240,7 +263,7 @@ def build_sessions(records):
         if cur is not None:
             # No Acct-Stop in the loaded window: close it 2 missed interims
             # after the last thing we actually heard from it.
-            cur["end"] = cur["last_seen"] + MISSED_INTERIMS_GRACE
+            cur["end"] = cur["last_seen"] + grace
             cur["closed_reason"] = "no-stop-seen (closed after missed-interim grace)"
             sessions.append(cur)
     return sessions
@@ -258,14 +281,14 @@ def _new_session(sid, rec, ts):
     }
 
 
-def find_sessions_for_ip(ip, ts, radacct_root, lookback_days):
+def find_sessions_for_ip(ip, ts, radacct_root, lookback_days, grace=None):
     dates = date_range(ts, lookback_days)
     matches = []
     for nas_dir in iter_nas_dirs(radacct_root):
         records = load_records(nas_dir, dates)
         if not records:
             continue
-        for s in build_sessions(records):
+        for s in build_sessions(records, grace):
             if s["framed_ip"] == ip and s["start"] <= ts <= s["end"]:
                 s["nas"] = os.path.basename(nas_dir)
                 matches.append(s)
@@ -276,9 +299,30 @@ def find_sessions_for_ip(ip, ts, radacct_root, lookback_days):
 # inner-identity linelog parsing
 # --------------------------------------------------------------------------
 
+# FreeRADIUS's %T expansion has varied across versions (ISO "T" separator,
+# dash-joined, space-joined, with or without microseconds). Pinning a single
+# format here caused a silent total failure once already: every line failed to
+# parse, find_identity skipped all of them, and the audit reported "no line for
+# this MAC" for EVERY device while the file plainly held thousands of lines.
+# Accept every plausible spelling instead, and count what still won't parse.
+_LINELOG_TS_FORMATS = (
+    "%Y-%m-%dT%H:%M:%S.%f",
+    "%Y-%m-%d-%H:%M:%S.%f",
+    "%Y-%m-%d %H:%M:%S.%f",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d-%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+)
+
+
 def parse_linelog_timestamp(ts_str):
-    # Must match mods-available/linelog_inner's format = "%T\t...".
-    return datetime.strptime(ts_str, "%Y-%m-%d-%H:%M:%S.%f").timestamp()
+    ts_str = ts_str.strip()
+    for fmt in _LINELOG_TS_FORMATS:
+        try:
+            return datetime.strptime(ts_str, fmt).timestamp()
+        except ValueError:
+            continue
+    raise ValueError(f"unrecognised linelog timestamp: {ts_str!r}")
 
 
 def find_identity(calling_station_id, ref_ts, linelog_root, lookback_days):
@@ -407,8 +451,8 @@ def nextdns_query_events(domain, since_ts, until_ts, dump_raw=False):
 # Resolution
 # --------------------------------------------------------------------------
 
-def resolve(ip, ts, radacct_root, linelog_root, lookback_days):
-    sessions = find_sessions_for_ip(ip, ts, radacct_root, lookback_days)
+def resolve(ip, ts, radacct_root, linelog_root, lookback_days, grace=None):
+    sessions = find_sessions_for_ip(ip, ts, radacct_root, lookback_days, grace)
     result = {"ip": ip, "timestamp": iso(ts)}
 
     if not sessions:
@@ -478,6 +522,7 @@ def data_health(radacct_root, linelog_root, dates):
         nas.append((os.path.basename(nas_dir), n))
 
     files, lines, macs = [], 0, set()
+    bad_ts, sample = 0, None
     for d in dates:
         path = os.path.join(linelog_root, f"inner-identity-{d}.log")
         if not os.path.exists(path):
@@ -490,6 +535,12 @@ def data_health(radacct_root, linelog_root, dates):
                     if len(parts) == 3:
                         lines += 1
                         macs.add(norm_mac(parts[1]))
+                        if sample is None:
+                            sample = line.rstrip("\n")
+                        try:
+                            parse_linelog_timestamp(parts[0])
+                        except ValueError:
+                            bad_ts += 1
         except OSError:
             pass
 
@@ -500,10 +551,12 @@ def data_health(radacct_root, linelog_root, dates):
         "linelog_files": files,
         "linelog_lines": lines,
         "linelog_macs": len(macs),
+        "linelog_bad_timestamps": bad_ts,
+        "linelog_sample": sample,
     }
 
 
-def audit(since_ts, until_ts, radacct_root, linelog_root, lookback_days):
+def audit(since_ts, until_ts, radacct_root, linelog_root, lookback_days, grace=None):
     """List every device seen in accounting during [since, until] and whether
     its MAC resolves to a real identity.
 
@@ -514,8 +567,11 @@ def audit(since_ts, until_ts, radacct_root, linelog_root, lookback_days):
     whose traffic genuinely cannot be attributed yet, and the outer User-Name
     seen in accounting is reported alongside so you can tell the two apart.
     """
+    if grace is None:
+        grace = MISSED_INTERIMS_GRACE
     dates = date_span(since_ts, until_ts, lookback_days)
     devices = {}
+    all_records = []
 
     for nas_dir in iter_nas_dirs(radacct_root):
         records = load_records(nas_dir, dates)
@@ -529,7 +585,8 @@ def audit(since_ts, until_ts, radacct_root, linelog_root, lookback_days):
             if sid and rec.get("User-Name"):
                 outer.setdefault(sid, rec["User-Name"])
 
-        for sess in build_sessions(records):
+        all_records.extend(records)
+        for sess in build_sessions(records, grace):
             # Keep only sessions overlapping the requested window.
             if sess["end"] < since_ts or sess["start"] > until_ts:
                 continue
@@ -582,7 +639,12 @@ def audit(since_ts, until_ts, radacct_root, linelog_root, lookback_days):
             "nas": sorted(d["nas"]),
         })
     rows.sort(key=lambda r: (r["user"] is not None, r["calling_station_id"] or ""))
-    return rows, data_health(radacct_root, linelog_root, dates)
+    health = data_health(radacct_root, linelog_root, dates)
+    gaps = interim_gap_stats(all_records)
+    health["observed_gaps"] = len(gaps)
+    health["median_gap"] = gaps[len(gaps) // 2] if gaps else None
+    health["grace"] = grace
+    return rows, health
 
 
 # --------------------------------------------------------------------------
@@ -609,16 +671,25 @@ def main():
     ap.add_argument("--radacct-root", default=RADACCT_ROOT)
     ap.add_argument("--linelog-root", default=LINELOG_ROOT)
     ap.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
+    ap.add_argument(
+        "--interim-interval", type=int, default=INTERIM_INTERVAL,
+        help="ACTUAL Acct-Interim-Interval your APs are sending, in seconds "
+             "(default %(default)s). A session is closed after 2 of these are "
+             "missed. Set this to the real value -- if it is too low, long "
+             "sessions get chopped into fragments and devices look like they "
+             "are reconnecting constantly when they are not.",
+    )
     ap.add_argument("--dump-raw", action="store_true", help="dump the raw NextDNS API response to stderr")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of a text table")
     args = ap.parse_args()
+    grace = 2 * args.interim_interval
 
     if args.audit:
         if not (args.since and args.until):
             ap.error("--audit requires --since and --until")
         rows, health = audit(
             parse_user_time(args.since), parse_user_time(args.until),
-            args.radacct_root, args.linelog_root, args.lookback_days,
+            args.radacct_root, args.linelog_root, args.lookback_days, grace,
         )
         if args.json:
             print(json.dumps({"health": health, "devices": rows}, indent=2))
@@ -637,11 +708,26 @@ def main():
                 print(f"  {len(health['linelog_files'])} file(s), "
                       f"{health['linelog_lines']} line(s), "
                       f"{health['linelog_macs']} distinct MAC(s)")
+                if health.get("linelog_bad_timestamps"):
+                    print(f"  !! {health['linelog_bad_timestamps']} line(s) have a timestamp")
+                    print("  !! this script cannot parse -- those lines are DISCARDED and")
+                    print("  !! every device they cover will read UNRESOLVED. Fix the")
+                    print("  !! format before believing any reason below.")
+                if health.get("linelog_sample"):
+                    print(f"  sample: {health['linelog_sample']}")
             else:
                 print("  (NO LINELOG FILES -- nothing has ever been written.)")
                 print("  Every device below will read UNRESOLVED for that reason")
                 print("  alone. Fix the linelog first; per-device reasons are")
                 print("  meaningless until this line shows files.")
+            if health.get("median_gap") is not None:
+                mg, gr = health["median_gap"], health["grace"]
+                print(f"observed interim  median gap {mg}s between records "
+                      f"(grace {gr}s)")
+                if mg > gr:
+                    print("  !! MEDIAN GAP EXCEEDS THE GRACE WINDOW. Sessions below are")
+                    print("  !! being split artificially -- 'sessions' counts are inflated")
+                    print(f"  !! and mean nothing. Re-run with --interim-interval {mg}")
             print()
             unresolved = [r for r in rows if not r["user"]]
             print(f"{len(rows)} device(s) seen; {len(unresolved)} UNRESOLVED\n")
@@ -666,13 +752,15 @@ def main():
         events = nextdns_query_events(args.domain, since_ts, until_ts, dump_raw=args.dump_raw)
         results = []
         for ev in events:
-            r = resolve(ev["ip"], ev["ts"], args.radacct_root, args.linelog_root, args.lookback_days)
+            r = resolve(ev["ip"], ev["ts"], args.radacct_root, args.linelog_root,
+                        args.lookback_days, grace)
             r["domain"] = args.domain
             r["nextdns_timestamp"] = iso(ev["ts"])
             results.append(r)
     elif args.ip and args.at:
         ts = parse_user_time(args.at)
-        results = [resolve(args.ip, ts, args.radacct_root, args.linelog_root, args.lookback_days)]
+        results = [resolve(args.ip, ts, args.radacct_root, args.linelog_root,
+                           args.lookback_days, grace)]
     else:
         ap.error("provide --domain with --since/--until, --ip with --at, or --audit with --since/--until")
         return
