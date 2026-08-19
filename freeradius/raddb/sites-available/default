@@ -65,6 +65,24 @@ server default {
 			&Acct-Interim-Interval := 600
 		}
 
+		# The inner tunnel resolved a real identity: put it in the
+		# Access-Accept so the AP reports THAT in accounting instead of the
+		# "anonymous" outer identity it sent us. Purely additive -- if the
+		# inner tunnel never ran (EAP TLS session resumption) session-state is
+		# empty and the reply goes out untouched.
+		#
+		# Whether the AP honours it is vendor-specific. If the UDM still shows
+		# "anonymous" after this is deployed, UniFi is ignoring the attribute
+		# and attribution has to go through scripts/lookup_user.py instead.
+		# Note this puts the real username in the RADIUS reply on the wire,
+		# where the anonymous outer identity was deliberately hiding it --
+		# fine on this LAN, but it is the tradeoff being made.
+		if (&session-state:User-Name) {
+			update reply {
+				&User-Name := "%{session-state:User-Name}"
+			}
+		}
+
 		Post-Auth-Type REJECT {
 			eap
 			attr_filter.access_reject

@@ -123,14 +123,35 @@ server inner-tunnel {
 		#    is never dereferenced — the same trap the authorize section above
 		#    documents for &control:Tmp-String-0.
 		if (&reply:Packet-Type == Access-Accept) {
-			# Calling-Station-Id is the ONLY join key downstream. It reaches
-			# the tunnel via copy_request_to_tunnel = yes in mods-available/eap;
-			# if that ever stops holding, the format string would still write a
-			# well-formed line with an EMPTY mac field, which joins to nothing
-			# and is indistinguishable from "device never authenticated". Refuse
-			# to write the line at all rather than log something unusable.
-			if (&Stripped-User-Name && &control:Tmp-String-0 && &Calling-Station-Id) {
-				inner_identity_log
+			if (&Stripped-User-Name && &control:Tmp-String-0) {
+				# Hand the real identity OUT to the outer request, so the AP can
+				# use it for accounting (and its own UI) instead of the
+				# "anonymous" outer identity the supplicant sent. RFC 2865 says
+				# an Access-Accept MAY carry a User-Name and the NAS SHOULD then
+				# use that value in subsequent Accounting-Requests.
+				#
+				# session-state (not outer.reply directly) because it survives
+				# the remaining EAP rounds; sites-available/default's post-auth
+				# copies it into the actual reply at the very end.
+				#
+				# This does NOT replace the linelog. A device resuming a cached
+				# TLS session never enters this virtual server at all, so no
+				# User-Name is published for it and only the linelog path can
+				# attribute that traffic. Both mechanisms are needed.
+				update outer.session-state {
+					&User-Name := "%{Stripped-User-Name}@%{control:Tmp-String-0}"
+				}
+
+				# Calling-Station-Id is the ONLY join key downstream. It reaches
+				# the tunnel via copy_request_to_tunnel = yes in
+				# mods-available/eap; if that ever stops holding, the format
+				# string would still write a well-formed line with an EMPTY mac
+				# field, which joins to nothing and is indistinguishable from
+				# "device never authenticated". Refuse to write the line at all
+				# rather than log something unusable.
+				if (&Calling-Station-Id) {
+					inner_identity_log
+				}
 			}
 		}
 
