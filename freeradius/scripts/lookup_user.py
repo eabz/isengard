@@ -463,6 +463,46 @@ def date_span(since_ts, until_ts, lookback_days):
     return out
 
 
+def data_health(radacct_root, linelog_root, dates):
+    """Is the source data even there?
+
+    Without this, "UNRESOLVED" is ambiguous in the worst way: a linelog that
+    was never written at all looks EXACTLY like a linelog that simply has no
+    line for this MAC. The first is a broken deployment you must fix; the
+    second is normal and self-heals as devices do full authentications. Always
+    check the totals below before believing any per-device "why".
+    """
+    nas = []
+    for nas_dir in iter_nas_dirs(radacct_root):
+        n = sum(1 for d in dates if os.path.exists(os.path.join(nas_dir, f"detail-{d}")))
+        nas.append((os.path.basename(nas_dir), n))
+
+    files, lines, macs = [], 0, set()
+    for d in dates:
+        path = os.path.join(linelog_root, f"inner-identity-{d}.log")
+        if not os.path.exists(path):
+            continue
+        files.append(os.path.basename(path))
+        try:
+            with open(path, errors="replace") as f:
+                for line in f:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) == 3:
+                        lines += 1
+                        macs.add(norm_mac(parts[1]))
+        except OSError:
+            pass
+
+    return {
+        "radacct_root": radacct_root,
+        "nas_dirs": nas,
+        "linelog_root": linelog_root,
+        "linelog_files": files,
+        "linelog_lines": lines,
+        "linelog_macs": len(macs),
+    }
+
+
 def audit(since_ts, until_ts, radacct_root, linelog_root, lookback_days):
     """List every device seen in accounting during [since, until] and whether
     its MAC resolves to a real identity.
@@ -542,7 +582,7 @@ def audit(since_ts, until_ts, radacct_root, linelog_root, lookback_days):
             "nas": sorted(d["nas"]),
         })
     rows.sort(key=lambda r: (r["user"] is not None, r["calling_station_id"] or ""))
-    return rows
+    return rows, data_health(radacct_root, linelog_root, dates)
 
 
 # --------------------------------------------------------------------------
@@ -576,13 +616,33 @@ def main():
     if args.audit:
         if not (args.since and args.until):
             ap.error("--audit requires --since and --until")
-        rows = audit(
+        rows, health = audit(
             parse_user_time(args.since), parse_user_time(args.until),
             args.radacct_root, args.linelog_root, args.lookback_days,
         )
         if args.json:
-            print(json.dumps(rows, indent=2))
+            print(json.dumps({"health": health, "devices": rows}, indent=2))
         else:
+            print("=" * 60)
+            print("SOURCE DATA (check this before trusting any 'why' below)")
+            print("=" * 60)
+            print(f"radacct root      {health['radacct_root']}")
+            if health["nas_dirs"]:
+                for name, n in health["nas_dirs"]:
+                    print(f"  NAS {name:<18} {n} detail file(s) in range")
+            else:
+                print("  (NO NAS DIRECTORIES -- no accounting is reaching this server)")
+            print(f"linelog root      {health['linelog_root']}")
+            if health["linelog_files"]:
+                print(f"  {len(health['linelog_files'])} file(s), "
+                      f"{health['linelog_lines']} line(s), "
+                      f"{health['linelog_macs']} distinct MAC(s)")
+            else:
+                print("  (NO LINELOG FILES -- nothing has ever been written.)")
+                print("  Every device below will read UNRESOLVED for that reason")
+                print("  alone. Fix the linelog first; per-device reasons are")
+                print("  meaningless until this line shows files.")
+            print()
             unresolved = [r for r in rows if not r["user"]]
             print(f"{len(rows)} device(s) seen; {len(unresolved)} UNRESOLVED\n")
             for r in rows:

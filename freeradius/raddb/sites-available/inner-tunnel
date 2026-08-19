@@ -123,7 +123,13 @@ server inner-tunnel {
 		#    is never dereferenced — the same trap the authorize section above
 		#    documents for &control:Tmp-String-0.
 		if (&reply:Packet-Type == Access-Accept) {
-			if (&Stripped-User-Name && &control:Tmp-String-0) {
+			# Calling-Station-Id is the ONLY join key downstream. It reaches
+			# the tunnel via copy_request_to_tunnel = yes in mods-available/eap;
+			# if that ever stops holding, the format string would still write a
+			# well-formed line with an EMPTY mac field, which joins to nothing
+			# and is indistinguishable from "device never authenticated". Refuse
+			# to write the line at all rather than log something unusable.
+			if (&Stripped-User-Name && &control:Tmp-String-0 && &Calling-Station-Id) {
 				inner_identity_log
 			}
 		}
