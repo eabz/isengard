@@ -36,6 +36,14 @@ services:
       - ./raddb/sites-available/inner-tunnel:/etc/freeradius/sites-available/inner-tunnel:ro
       - ./raddb/clients.conf:/etc/raddb/clients.conf:ro
       - ./raddb/clients.conf:/etc/freeradius/clients.conf:ro
+
+      # Lookup / housekeeping scripts. Also COPYed into the image (so it stays
+      # self-contained), but bind-mounted here because these get iterated on far
+      # more often than the RADIUS config — without the mount, adding a flag to
+      # lookup_user.py needs a full image rebuild and a container recreate,
+      # i.e. a RADIUS outage, to run a read-only diagnostic.
+      - ./scripts/lookup_user.py:/usr/local/bin/lookup_user.py:ro
+      - ./scripts/rotate-logs.sh:/usr/local/bin/rotate-logs.sh:ro
     networks:
       - radius_test
 

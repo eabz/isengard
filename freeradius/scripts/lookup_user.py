@@ -90,6 +90,22 @@ def iso(ts):
     return datetime.fromtimestamp(ts).isoformat(sep=" ", timespec="seconds")
 
 
+def norm_mac(s):
+    """Compare MACs by their hex digits alone.
+
+    The Calling-Station-Id the linelog sees comes from the Access-Request; the
+    one radacct sees comes from the Accounting-Request. Same AP, but vendors
+    are not always consistent about separator or case BETWEEN packet types --
+    "AA-BB-CC-DD-EE-FF", "aa:bb:cc:dd:ee:ff" and "aabbccddeeff" all denote the
+    same device. A plain lowercase comparison silently misses those, and a
+    silent miss here looks exactly like "this device is anonymous", which is
+    the bug this whole script exists to eliminate. Strip to hex digits instead.
+    """
+    if not s:
+        return ""
+    return "".join(c for c in s.lower() if c in "0123456789abcdef")
+
+
 def date_range(ts, lookback_days):
     """Date strings (YYYYMMDD) from ts-lookback_days through ts+1 day.
 
@@ -273,8 +289,11 @@ def find_identity(calling_station_id, ref_ts, linelog_root, lookback_days):
     inner-tunnel authentications, so the matching linelog line can be well
     before the session it's being matched against."""
     dates = date_range(ref_ts, lookback_days)
+    want_mac = norm_mac(calling_station_id)
     slack = 60
     best = None
+    if not want_mac:
+        return None
     for d in dates:
         path = os.path.join(linelog_root, f"inner-identity-{d}.log")
         try:
@@ -287,7 +306,7 @@ def find_identity(calling_station_id, ref_ts, linelog_root, lookback_days):
                 if len(parts) != 3:
                     continue
                 ts_str, csid, identity = parts
-                if csid.lower() != calling_station_id.lower():
+                if norm_mac(csid) != want_mac:
                     continue
                 try:
                     ts_val = parse_linelog_timestamp(ts_str)
@@ -433,6 +452,99 @@ def resolve(ip, ts, radacct_root, linelog_root, lookback_days):
     return result
 
 
+def date_span(since_ts, until_ts, lookback_days):
+    """Every YYYYMMDD from since-lookback through until+1 day."""
+    start = datetime.fromtimestamp(since_ts).date() - timedelta(days=lookback_days)
+    end = datetime.fromtimestamp(until_ts).date() + timedelta(days=1)
+    out, d = [], start
+    while d <= end:
+        out.append(d.strftime("%Y%m%d"))
+        d += timedelta(days=1)
+    return out
+
+
+def audit(since_ts, until_ts, radacct_root, linelog_root, lookback_days):
+    """List every device seen in accounting during [since, until] and whether
+    its MAC resolves to a real identity.
+
+    This is the diagnostic for "some devices still show as anonymous". The
+    outer accounting User-Name is EXPECTED to be anonymous for many clients --
+    that is the whole premise -- so what actually matters is whether the MAC
+    joins to a linelog identity. Anything listed UNRESOLVED here is a device
+    whose traffic genuinely cannot be attributed yet, and the outer User-Name
+    seen in accounting is reported alongside so you can tell the two apart.
+    """
+    dates = date_span(since_ts, until_ts, lookback_days)
+    devices = {}
+
+    for nas_dir in iter_nas_dirs(radacct_root):
+        records = load_records(nas_dir, dates)
+        if not records:
+            continue
+        # Outer User-Name per session, straight off the accounting records --
+        # this is the value that reads "anonymous"/"anonimo".
+        outer = {}
+        for rec in records:
+            sid = rec.get("Acct-Session-Id")
+            if sid and rec.get("User-Name"):
+                outer.setdefault(sid, rec["User-Name"])
+
+        for sess in build_sessions(records):
+            # Keep only sessions overlapping the requested window.
+            if sess["end"] < since_ts or sess["start"] > until_ts:
+                continue
+            mac = sess["calling_station_id"]
+            key = norm_mac(mac) or f"<no-csid:{sess['session_id']}>"
+            d = devices.setdefault(key, {
+                "calling_station_id": mac,
+                "sessions": 0,
+                "ips": set(),
+                "outer_names": set(),
+                "first": sess["start"],
+                "last": sess["end"],
+                "nas": set(),
+            })
+            d["sessions"] += 1
+            if sess["framed_ip"]:
+                d["ips"].add(sess["framed_ip"])
+            if outer.get(sess["session_id"]):
+                d["outer_names"].add(outer[sess["session_id"]])
+            d["first"] = min(d["first"], sess["start"])
+            d["last"] = max(d["last"], sess["end"])
+            d["nas"].add(os.path.basename(nas_dir))
+
+    rows = []
+    for key, d in devices.items():
+        identity = None
+        reason = None
+        if not d["calling_station_id"]:
+            reason = "accounting record carries no Calling-Station-Id (nothing to join on)"
+        else:
+            found = find_identity(d["calling_station_id"], d["first"], linelog_root, lookback_days)
+            if found:
+                identity = found[1]
+            else:
+                reason = (
+                    "no inner-identity line for this MAC within --lookback-days "
+                    "(EAP TLS session resumption skips the inner tunnel, so a device "
+                    "that last authenticated in full before the linelog existed -- or "
+                    "longer ago than the lookback -- writes no line)"
+                )
+        rows.append({
+            "calling_station_id": d["calling_station_id"],
+            "user": identity,
+            "reason": reason,
+            "sessions": d["sessions"],
+            "ips": sorted(d["ips"]),
+            "outer_user_names": sorted(d["outer_names"]),
+            "first_seen": iso(d["first"]),
+            "last_seen": iso(d["last"]),
+            "nas": sorted(d["nas"]),
+        })
+    rows.sort(key=lambda r: (r["user"] is not None, r["calling_station_id"] or ""))
+    return rows
+
+
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
@@ -447,6 +559,12 @@ def main():
     mode.add_argument("--domain", help="domain to look up via the NextDNS Logs API")
     mode.add_argument("--since", help="range start for --domain (epoch or ISO-8601)")
     mode.add_argument("--until", help="range end for --domain (epoch or ISO-8601)")
+    mode.add_argument(
+        "--audit", action="store_true",
+        help="list every device seen in accounting between --since and --until and "
+             "whether its MAC resolves to a real identity (diagnostic for "
+             "'devices still showing as anonymous')",
+    )
 
     ap.add_argument("--radacct-root", default=RADACCT_ROOT)
     ap.add_argument("--linelog-root", default=LINELOG_ROOT)
@@ -454,6 +572,31 @@ def main():
     ap.add_argument("--dump-raw", action="store_true", help="dump the raw NextDNS API response to stderr")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of a text table")
     args = ap.parse_args()
+
+    if args.audit:
+        if not (args.since and args.until):
+            ap.error("--audit requires --since and --until")
+        rows = audit(
+            parse_user_time(args.since), parse_user_time(args.until),
+            args.radacct_root, args.linelog_root, args.lookback_days,
+        )
+        if args.json:
+            print(json.dumps(rows, indent=2))
+        else:
+            unresolved = [r for r in rows if not r["user"]]
+            print(f"{len(rows)} device(s) seen; {len(unresolved)} UNRESOLVED\n")
+            for r in rows:
+                print("-" * 60)
+                print(f"{'mac':22} {r['calling_station_id']}")
+                print(f"{'user':22} {r['user'] or 'UNRESOLVED'}")
+                if r["reason"]:
+                    print(f"{'why':22} {r['reason']}")
+                print(f"{'outer User-Name':22} {', '.join(r['outer_user_names']) or '(none)'}")
+                print(f"{'ips':22} {', '.join(r['ips']) or '(none)'}")
+                print(f"{'sessions':22} {r['sessions']}")
+                print(f"{'first/last seen':22} {r['first_seen']} .. {r['last_seen']}")
+                print(f"{'nas':22} {', '.join(r['nas'])}")
+        return
 
     if args.domain:
         if not (args.since and args.until):
@@ -471,7 +614,7 @@ def main():
         ts = parse_user_time(args.at)
         results = [resolve(args.ip, ts, args.radacct_root, args.linelog_root, args.lookback_days)]
     else:
-        ap.error("provide --domain with --since/--until, or --ip with --at")
+        ap.error("provide --domain with --since/--until, --ip with --at, or --audit with --since/--until")
         return
 
     if args.json:

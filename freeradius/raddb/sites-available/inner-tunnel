@@ -103,11 +103,30 @@ server inner-tunnel {
 	}
 
 	post-auth {
-		# Record the real, fully-qualified identity against the MAC — only on
-		# accept (this block is skipped for Post-Auth-Type REJECT below). This
-		# is the only place the outer "anonymous" identity and the real LDAP
-		# identity are ever seen together; see mods-available/linelog_inner.
-		inner_identity_log
+		# Record the real, fully-qualified identity against the MAC. This is the
+		# only place the outer "anonymous" identity and the real LDAP identity
+		# are ever seen together; see mods-available/linelog_inner.
+		#
+		# Both guards matter:
+		#
+		# 1. Statements at the top level of post-auth run for REJECTS TOO.
+		#    FreeRADIUS enters post-auth with &control:Post-Auth-Type := Reject
+		#    and still walks the whole section — "Post-Auth-Type REJECT" below is
+		#    a switch on that attribute, NOT an early exit. Without the
+		#    Access-Accept check, every failed password would write an identity
+		#    line for that MAC, and lookup_user.py would attribute browsing to
+		#    someone who only ever typed a username at the login prompt.
+		#
+		# 2. If authorize never set Stripped-User-Name (e.g. a bare probe with no
+		#    identity), the format string would still emit a junk line ending in
+		#    "\t@cedrosnorte.edu.mx". Short-circuit with && so an unset attribute
+		#    is never dereferenced — the same trap the authorize section above
+		#    documents for &control:Tmp-String-0.
+		if (&reply:Packet-Type == Access-Accept) {
+			if (&Stripped-User-Name && &control:Tmp-String-0) {
+				inner_identity_log
+			}
+		}
 
 		Post-Auth-Type REJECT {
 			attr_filter.access_reject

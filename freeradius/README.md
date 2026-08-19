@@ -171,6 +171,41 @@ touch it):**
   **however many NAS directories exist** (the script globs them; it doesn't
   assume a fixed count or fixed IPs).
 
+### "Some devices still show as anonymous"
+
+**In the UniFi/UDM client list, that is expected and is not a bug.** The UDM
+displays the **outer** RADIUS `User-Name` — the identity the supplicant sends
+*before* the TLS tunnel opens. Nothing in this repo changes that value, by
+design: the whole premise here is that the outer identity is unreliable
+(`anonymous`, `anonimo`, `anonymous@cedrosnorte.edu.mx` are all normal
+supplicant behaviour) and that the real identity is recovered from a
+side-channel — the inner-identity linelog — at *lookup* time. A client that
+shows `anonymous` in the UDM UI can still be perfectly attributable.
+
+So the question to ask is never "what does the UDM show", it is "does this
+MAC resolve?". That's what `--audit` answers:
+
+```bash
+docker exec freeradius lookup_user.py --audit \
+    --since 2026-08-19T06:00:00 --until 2026-08-19T09:00:00
+```
+
+It lists every device seen in accounting in that window with its resolved
+identity, its outer `User-Name` side by side, and — for anything `UNRESOLVED`
+— why. Only the `UNRESOLVED` rows are actual gaps.
+
+The usual reason for a genuine `UNRESOLVED`:
+
+- **EAP TLS session resumption skips the inner tunnel entirely.** With
+  `cache { enable = yes; lifetime = 48 }` in `mods-available/eap`, a resuming
+  device never re-runs `inner-tunnel`, so it writes no linelog line. Devices
+  holding a cached session from before the linelog was deployed stay
+  unresolvable until that session expires (≤48h) — a container rebuild
+  flushes the in-memory cache and forces full auths, which fixes it faster.
+- **MAC randomization changing.** iOS/Android private addresses are stable
+  per-SSID, so the join holds; but a user toggling "Private Wi-Fi Address"
+  off/on gets a new MAC and starts fresh.
+
 **NextDNS API caveat:** the exact JSON field name for the client IP in the
 NextDNS Logs API response hasn't been verified live in this environment.
 Run once with `--dump-raw` and adjust `_IP_KEYS` in `scripts/lookup_user.py`
