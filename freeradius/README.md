@@ -38,12 +38,20 @@ password hash) — which is why the inner method must be **PAP**.
 | `raddb/mods-available/linelog_inner` | Logs the real fully-qualified identity against the MAC on every inner Access-Accept (see "Attributing NextDNS query logs to real users" below). |
 | `raddb/clients.conf` | APs + loopback/bridge test clients. AP secret comes from `.env`; test secret too. |
 | `stunnel/google-ldap.conf` | TLS proxy to `ldap.google.com:636`. |
-| `docker-entrypoint.sh` | Enables the LDAP + linelog modules, makes the EAP cert, starts stunnel, validates, runs. |
+| `.dockerignore` | Allows only runtime configuration and scripts into the image build; excludes secrets and certificates. |
+| `docker-entrypoint.sh` | Prepares modules, certificate permissions and the TLS cache, then starts Supervisor. |
+| `supervisor/radius.conf` | Starts and independently restarts stunnel and FreeRADIUS. |
+| `scripts/radius-service.py` | Waits for stunnel before starting FreeRADIUS; checks local process/socket readiness. |
+| `scripts/renew-eap-cert.py` | Host-side ACME issuance/renewal, certificate validation, activation and rollback. |
+| `scripts/install-cert-renewal.sh`, `systemd/` | Installs a daily certificate check on the Linux Docker host. |
 | `scripts/lookup_user.py` | Domain/IP + time -> real user, via NextDNS + radacct + the inner-identity linelog. |
 | `scripts/rotate-logs.sh` | Deletes radacct/linelog files older than `LOG_RETENTION_DAYS`. |
 
-All secrets live in `.env` (gitignored) and are read by the config via
-`$ENV{…}`, so `git pull` never conflicts on credentials.
+LDAP credentials and RADIUS shared secrets live in `.env` (gitignored) and
+are read by the config via `$ENV{…}`. Private keys stay in `raddb/certs/`;
+ACME account state and saved DNS credentials stay in `acme/`. Neither directory
+enters the build context. Certificates are mounted into the running container.
+Rebuild to apply `.dockerignore`; it cannot remove secrets from older images.
 
 ## Setup
 
@@ -67,19 +75,78 @@ All secrets live in `.env` (gitignored) and are read by the config via
 The EAP server cert lives in `raddb/certs/eap/`. On first start a **self-signed**
 cert is generated automatically (devices will prompt or need the CA).
 
-For a **no-prompt** experience, use a **public Let's Encrypt cert** issued via
-**Cloudflare DNS-01** (no need to expose the server to the internet):
+Use a **public Let's Encrypt cert** issued via **Cloudflare DNS-01** to avoid
+distributing a private CA (no need to expose the server to the internet).
+Run from this directory on the Linux Docker host, after deploying the updated
+container. The host needs Python 3.8+, Docker Compose, OpenSSL 1.1.1 or 3 and
+an up-to-date system CA trust store. Export a Cloudflare token limited to DNS
+editing for the required zone as `CF_Token`, then run:
 
 ```bash
-CF_Token='cloudflare-token-with-DNS-edit' \
-  ./scripts/issue-eap-cert.sh radius.cedrosnorte.edu.mx
-docker compose restart freeradius
+sudo --preserve-env=CF_Token ./scripts/issue-eap-cert.sh radius.cedrosnorte.edu.mx
 ```
 
-Why public: the root CA is already in every device's trust store. Note that
-**Cloudflare Origin CA certs do NOT work** (devices don't trust them) — only a
-publicly-trusted cert (Let's Encrypt) does. Cloudflare is used here just as the
-DNS provider for the ACME challenge.
+Use the hostname configured in `.env` as `RADIUS_HOSTNAME`. Issuance validates
+and activates the certificate automatically; no separate container restart
+is needed. For initial provisioning before the container exists, append
+`--install-only`, then start the container. acme.sh saves the DNS credentials
+under `acme/` for subsequent renewal. Keep that directory private and backed up.
+
+Devices must still validate the server hostname and a trusted CA; a public
+certificate does not configure WiFi profiles automatically. **Cloudflare
+Origin CA certificates are unsuitable** for clients using their system trust
+store. Cloudflare is only the DNS provider for this ACME challenge.
+
+### Automatic renewal on the Linux host
+
+Once issuance has succeeded and `acme/` contains the existing account and
+certificate state, install the timer from this directory:
+
+```bash
+sudo ./scripts/install-cert-renewal.sh radius.cedrosnorte.edu.mx
+sudo systemctl start isengard-eap-renew.service
+systemctl list-timers isengard-eap-renew.timer
+sudo journalctl -u isengard-eap-renew.service -n 50 --no-pager
+```
+
+It checks daily between 03:20 and 03:40 in the host timezone, and catches up
+after downtime. acme.sh renews only when due. The timer uses the saved DNS
+credentials in `acme/`; the systemd unit contains no Cloudflare token. If the
+repository moves, rerun the installer to update its path. Manual renewal uses
+the same workflow: `sudo python3 scripts/renew-eap-cert.py <radius-hostname>`.
+
+The ACME container writes into a temporary staging directory. Before activation,
+the host verifies the hostname, expiration, public trust chain, server purpose
+and matching private key. If files changed, the script backs up the previous
+bundle, preserves ownership and permissions, replaces the live files, runs
+`freeradius -C`, and restarts **only FreeRADIUS** through Supervisor. This briefly
+interrupts RADIUS requests; stunnel keeps running and the TLS cache persists.
+Failed validation leaves the live bundle untouched; failed activation restores
+the previous files and attempts to restart with them. A private backup remains
+in `acme/previous-eap/`. An unchanged certificate causes no restart.
+
+Failures are visible in the service exit status and journal. Connect that
+service status to your server monitoring if you need push/email alerts;
+installing the timer alone does not deliver notifications.
+
+### Google LDAP client certificate
+
+`raddb/certs/google/ldap-client.crt` is a separate certificate issued by Google,
+not by Let's Encrypt. Each daily job checks whether it expires within 30 days.
+If so, it logs `ACTION REQUIRED` and fails the service after finishing the EAP
+renewal work, making the warning visible to monitoring.
+
+Generate a replacement certificate and key in Google Admin → Apps → LDAP →
+your client → Authentication, following [Google's certificate management
+instructions](https://knowledge.workspace.google.com/admin/apps/manage-ldap-clients?hl=en).
+Replace both local files, then reload them by restarting only stunnel:
+
+```bash
+docker exec freeradius supervisorctl -c /etc/supervisor/radius.conf restart stunnel
+```
+
+Check a real LDAP search/bind afterward with `scripts/ldap-test.sh`. Google
+client certificate replacement remains an administrator action in this setup.
 
 ### Device settings (EAP-TTLS + PAP)
 
@@ -91,13 +158,85 @@ DNS provider for the ACME challenge.
 
 ## Long time between reauthentications
 
-- `default` post-auth sets `Session-Timeout = 86400` (24h) and
-  `Termination-Action = RADIUS-Request` (reauth happens in place, no drop).
-  Raise the number for longer.
-- EAP **TLS session cache** (`mods-available/eap`, 24h) lets devices reconnect
-  without a full handshake or another LDAP hit.
+- `default` post-auth sets `Session-Timeout = 172800` (48h) and
+  `Termination-Action = RADIUS-Request`, asking the AP to reauthenticate.
+  Whether this is seamless also depends on the AP and supplicant.
+- EAP **TLS session cache** (`mods-available/eap`, 48h) lets compatible devices
+  resume an authenticated session without another full handshake or LDAP bind.
+  FreeRADIUS 3.2.10 disables OpenSSL's internal cache, so `enable = yes` and
+  `max_entries` alone do not provide session storage. We use `persist_dir` at
+  `/var/lib/freeradius/tlscache` and a stable cache `name` instead.
+- The dedicated `freeradius-tls-cache` volume survives container recreation.
+  The entrypoint creates its directory with mode `0700`, assigns it to the
+  FreeRADIUS user, and sets a restrictive umask. Treat this volume as secret:
+  it contains TLS session keys, not just diagnostic logs.
+- Cache files older than 48 hours are removed at startup and by the daily
+  `rotate-logs.sh` job below, independently of accounting-log retention.
+  Keep both cleanup thresholds aligned with `cache.lifetime` when changing it.
+
+Apply changes to the cache setup with `docker compose up -d --build freeradius`;
+`restart` alone does not install the updated entrypoint or add the new volume.
+This briefly interrupts RADIUS service. Existing devices need one successful
+full authentication before they have a session to resume.
+
+To verify resumption, use a supplicant configured for TTLS/PAP that supports
+fast reauthentication. After a successful login, reconnect while retaining
+the client's TLS session. In a controlled FreeRADIUS debug trace, expect
+`EAP-Session-Resumed := 1` and no inner-tunnel LDAP bind on the resumed login.
+Repeat after a container restart to check persistence. The startup message
+`Using cached TLS configuration from previous invocation` only refers to
+reusing the parsed configuration; it does **not** prove session resumption.
+PAP requests from `radius-test-auth.sh` do not exercise the TLS cache.
+
+Resumption skips the password/account check in Google. Suspending an account
+there does not immediately invalidate its cached TLS session or an existing
+WiFi connection. To invalidate all cached sessions, change the cache `name`
+(for example, increment `v1` to `v2`) and restart FreeRADIUS; active WiFi
+connections must also be disconnected on the AP if immediate revocation is
+required.
 
 ## Testing
+
+### Process health and recovery
+
+```bash
+docker compose ps
+docker exec freeradius supervisorctl -c /etc/supervisor/radius.conf status
+docker exec freeradius python3 /usr/local/bin/radius-service.py health
+docker compose logs --tail 100 freeradius
+```
+
+Supervisor automatically restarts either process if it exits, including failed
+startup attempts. If stunnel exits, FreeRADIUS stays running while stunnel is
+restarted. A manual recovery uses `supervisorctl ... restart stunnel` as above.
+Recreate the container with `docker compose up -d --build freeradius` to install
+this supervision; restarting the old image does not add it.
+
+The Docker healthcheck runs every 30 seconds and checks both process states,
+stunnel's listener at `127.0.0.1:1636`, and RADIUS UDP ports 1812/1813. It reads
+local socket tables, so it does not create extra TLS connections to Google.
+It does not prove Google is reachable or detect every hung process. Docker's
+`unhealthy` status is diagnostic; **Supervisor**, not the healthcheck, performs
+process recovery. Docker's restart policy handles a container exit.
+
+`TIMEOUTconnect` messages from stunnel indicate an unsuccessful connection to
+Google while stunnel was running; they do not establish that the local process
+died. If they persist with healthy local processes, investigate outbound TCP
+636, DNS and upstream availability. TLS EOF/close messages alone do not establish
+that a user authentication failed; correlate them with a real LDAP/RADIUS test.
+
+### Offline regression tests
+
+```bash
+python3 -B -m unittest discover -s tests -v
+```
+
+These use OpenSSL for certificate checks and simulate Docker/ACME operations
+to test activation and rollback. Install `supervisor` in the test interpreter
+to also run the integration test that kills a fixture process and verifies
+independent restart and graceful shutdown. It uses no Google credentials.
+
+### LDAP authentication
 
 ```bash
 # LDAP side (finds user, checks password) — best for diagnosing one user:
@@ -200,8 +339,9 @@ The usual reason for a genuine `UNRESOLVED`:
   `cache { enable = yes; lifetime = 48 }` in `mods-available/eap`, a resuming
   device never re-runs `inner-tunnel`, so it writes no linelog line. Devices
   holding a cached session from before the linelog was deployed stay
-  unresolvable until that session expires (≤48h) — a container rebuild
-  flushes the in-memory cache and forces full auths, which fixes it faster.
+  unresolvable until they perform a full authentication. A container rebuild
+  now preserves the disk cache; change its `name` and restart to invalidate
+  existing sessions when a full authentication is needed.
 - **MAC randomization changing.** iOS/Android private addresses are stable
   per-SSID, so the join holds; but a user toggling "Private Wi-Fi Address"
   off/on gets a new MAC and starts fresh.
@@ -222,6 +362,9 @@ date-stamped per file, so "rotation" is just deleting old files —
 ```
 30 3 * * * docker exec freeradius rotate-logs.sh >> /var/log/freeradius-rotate.log 2>&1
 ```
+
+The same job removes `.asn1` and `.vps` TLS cache files older than 48 hours.
+`LOG_RETENTION_DAYS` applies only to the accounting and identity logs.
 
 ## AP addressing: use static DHCP reservations
 

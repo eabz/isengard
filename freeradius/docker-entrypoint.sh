@@ -1,5 +1,7 @@
 #!/bin/sh
 set -e
+# TLS cache policy files must be private to the FreeRADIUS process.
+umask 077
 
 # Resolve the active config dir (official image uses /etc/freeradius; /etc/raddb
 # is usually a symlink to it).
@@ -82,7 +84,20 @@ chmod 640 "${EAPDIR}/server.key" 2>/dev/null || true
 chmod 644 "${EAPDIR}/server.pem" "${EAPDIR}/ca.pem" 2>/dev/null || true
 rm -f "${EAPDIR}/ca.key" 2>/dev/null || true
 
-# --- Google Secure LDAP over stunnel ---------------------------------------
+# --- Persistent EAP TLS session cache --------------------------------------
+# The disk cache contains TLS session secrets. Keep it outside raddb and the
+# log volume, and fail startup if its ownership/permissions cannot be set.
+TLS_CACHE_DIR=/var/lib/freeradius/tlscache
+mkdir -p "${TLS_CACHE_DIR}"
+if [ -n "${FR_USER}" ]; then
+	chown -R "${FR_USER}":"${FR_USER}" "${TLS_CACHE_DIR}"
+fi
+chmod 700 "${TLS_CACHE_DIR}"
+# Also remove stale sessions at startup; rotate-logs.sh handles daily cleanup.
+# 2880 minutes = the 48-hour lifetime in mods-available/eap.
+find "${TLS_CACHE_DIR}" -type f \( -name '*.asn1' -o -name '*.vps' \) -mmin +2880 -delete
+
+# --- Google Secure LDAP client certificate --------------------------------
 CRT="${RADDB}/certs/google/ldap-client.crt"
 KEY="${RADDB}/certs/google/ldap-client.key"
 
@@ -92,22 +107,16 @@ if [ ! -f "${CRT}" ] || [ ! -f "${KEY}" ]; then
 	exit 1
 fi
 
-echo "Starting stunnel TLS proxy to ldap.google.com..."
-stunnel4 /etc/stunnel/google-ldap.conf &
-STUNNEL_PID=$!
-sleep 2
-if ! kill -0 "${STUNNEL_PID}" 2>/dev/null; then
-	echo "ERROR: stunnel exited unexpectedly." >&2
-	exit 1
-fi
-echo "stunnel running (pid ${STUNNEL_PID}) on 127.0.0.1:1636"
-
-# --- Validate config, then run ---------------------------------------------
-echo "Validating FreeRADIUS configuration..."
-if ! freeradius -XC; then
-	echo "ERROR: FreeRADIUS configuration check failed (see above)." >&2
-	exit 1
-fi
-
-echo "Configuration OK — starting FreeRADIUS."
-exec freeradius "$@"
+# --- Supervise both foreground processes ----------------------------------
+# Supervisor stays PID 1, reaps children, forwards shutdown signals and
+# restarts stunnel independently. radius-service.py waits for its listener
+# before validating/starting FreeRADIUS. Keep arguments as data, not shell code.
+mkdir -p /run/freeradius-supervisor
+chmod 700 /run/freeradius-supervisor
+python3 - "$@" <<'PY'
+import json
+import sys
+from pathlib import Path
+Path('/run/freeradius-supervisor/radius-args.json').write_text(json.dumps(sys.argv[1:]))
+PY
+exec supervisord -c /etc/supervisor/radius.conf

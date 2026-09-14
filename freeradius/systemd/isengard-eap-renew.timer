@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Isengard EAP certificate renewal check
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+RandomizedDelaySec=20min
+Persistent=true
+Unit=isengard-eap-renew.service
+
+[Install]
+WantedBy=timers.target

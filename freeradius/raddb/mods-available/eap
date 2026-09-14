@@ -47,15 +47,15 @@ eap {
 		tls_min_version = "1.2"
 		tls_max_version = "1.2"
 
-		# Session resumption: a reauth/reconnect reuses the cached TLS session,
-		# skipping BOTH the full handshake and the inner LDAP bind — so reauth is
-		# instant and never drops the client. max_entries must be >= the number of
-		# devices on the network, or sessions get evicted and fall back to a slow
-		# full reauth (the usual cause of reauth disconnects). Default is only 255.
+		# FreeRADIUS 3.2.10 disables OpenSSL's internal session cache. Use the
+		# disk backend so a successful TTLS session can resume without another
+		# LDAP bind. The stable name and Docker volume preserve it on restart.
+		# max_entries only sizes the disabled OpenSSL cache, not this backend.
 		cache {
 			enable = yes
-			lifetime = 48      # hours (>= Session-Timeout, which is 2 days)
-			max_entries = 16384
+			lifetime = 48      # hours; keep cleanup in rotate-logs.sh in sync
+			name = "isengard-eap-ttls-v1"
+			persist_dir = /var/lib/freeradius/tlscache
 		}
 
 		verify {

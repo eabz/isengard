@@ -1,0 +1,28 @@
+# Only application configuration and runtime scripts enter the build context.
+# In particular, .env*, acme/, certificates, keys and backups stay on the host.
+**
+!Dockerfile
+!docker-entrypoint.sh
+!raddb/clients.conf
+!raddb/mods-available/eap
+!raddb/mods-available/ldap_google
+!raddb/mods-available/linelog_inner
+!raddb/sites-available/default
+!raddb/sites-available/inner-tunnel
+!raddb/mods-config/files/authorize
+!stunnel/google-ldap.conf
+!supervisor/radius.conf
+!scripts/lookup_user.py
+!scripts/rotate-logs.sh
+!scripts/radius-service.py
+# Also exclude accidental secret files inside the allowed configuration dirs.
+acme/
+raddb/certs/
+**/*.key
+**/*.pem
+**/*.crt
+**/*.p12
+**/*.pfx
+**/.env*
+**/*~
+**/*.bak

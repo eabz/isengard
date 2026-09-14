@@ -1,0 +1,11 @@
+[Unit]
+Description=Renew Isengard EAP certificate and check Google LDAP certificate expiry
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/isengard-eap-renew.env
+ExecStart=/usr/bin/python3 ${ISENGARD_RADIUS_DIR}/scripts/renew-eap-cert.py ${RADIUS_HOSTNAME}
+UMask=0077
+TimeoutStartSec=35min
