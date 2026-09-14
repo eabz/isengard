@@ -129,6 +129,18 @@ Failures are visible in the service exit status and journal. Connect that
 service status to your server monitoring if you need push/email alerts;
 installing the timer alone does not deliver notifications.
 
+If an older renewal script reports `docker failed (exit 1)` with no detail,
+update `scripts/renew-eap-cert.py` on the host and rerun it. The corrected
+script prints the failed command and sends FreeRADIUS validation errors to
+stdout. It also applies the same secret defaults as the entrypoint: a separate
+`docker exec` does not inherit environment variables exported during startup.
+Previously, an omitted/empty `RADIUS_TEST_SECRET` could cause
+`clients.conf[17]: secret must be at least 1 character long` during renewal
+while the running server was correctly using its startup default. This host
+script fix works with the existing supervised image; rebuilding is not required
+to retry renewal. Keep configured secrets unchanged. The previous certificate
+is restored if the configuration check fails, before any restart occurs.
+
 ### Google LDAP client certificate
 
 `raddb/certs/google/ldap-client.crt` is a separate certificate issued by Google,

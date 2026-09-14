@@ -57,7 +57,7 @@ def start():
             raise RuntimeError('stunnel did not start listening within 30 seconds')
         time.sleep(0.5)
     print('Validating FreeRADIUS configuration...', flush=True)
-    subprocess.run(['freeradius', '-C'], check=True, timeout=60)
+    subprocess.run(['freeradius', '-C', '-l', 'stdout'], check=True, timeout=60)
     print('Configuration OK — starting FreeRADIUS.', flush=True)
     args = json.loads(ARGS_FILE.read_text())
     os.execvp('freeradius', ['freeradius', '-f', *args])

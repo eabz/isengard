@@ -2,6 +2,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -22,6 +23,69 @@ def load(name, filename):
 
 renew = load('renew', 'renew-eap-cert.py')
 service = load('service', 'radius-service.py')
+
+
+class CommandTests(unittest.TestCase):
+    def test_silent_failure_identifies_the_failed_command(self):
+        command = ['docker', 'compose', 'exec', '-T', 'freeradius', 'freeradius', '-C']
+        result = subprocess.CompletedProcess(command, 1, '', '')
+        with patch.object(renew.subprocess, 'run', return_value=result):
+            with self.assertRaises(RuntimeError) as error:
+                renew.run(command)
+        self.assertIn('docker compose exec -T freeradius freeradius -C', str(error.exception))
+        self.assertIn('exit 1', str(error.exception))
+        self.assertIn('no output on stdout/stderr', str(error.exception))
+
+    def test_command_and_output_redact_dns_credentials(self):
+        secret = 'synthetic-cloudflare-token'
+        command = ['docker', 'run', secret]
+        result = subprocess.CompletedProcess(command, 1, secret, '')
+        with patch.dict(os.environ, {'CF_Token': secret}):
+            with patch.object(renew.subprocess, 'run', return_value=result):
+                with self.assertRaises(RuntimeError) as error:
+                    renew.run(command)
+        self.assertNotIn(secret, str(error.exception))
+        self.assertIn('[REDACTED]', str(error.exception))
+
+
+class ConfigEnvironmentTests(unittest.TestCase):
+    """Execute the real check shell with a harmless replacement for FreeRADIUS."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        executable = Path(self.directory.name) / 'freeradius'
+        executable.write_text('''#!/usr/bin/env python3
+import json, os, sys
+print(json.dumps({"ap": os.environ["RADIUS_CLIENT_SECRET"],
+                  "test": os.environ["RADIUS_TEST_SECRET"], "args": sys.argv[1:]}))
+''')
+        executable.chmod(0o700)
+
+    def check(self, **configured):
+        env = os.environ.copy()
+        for name in ('RADIUS_CLIENT_SECRET', 'RADIUS_TEST_SECRET'):
+            env.pop(name, None)
+        env.update(configured)
+        env['PATH'] = self.directory.name + os.pathsep + env.get('PATH', os.defpath)
+        result = subprocess.run(['sh', '-ec', renew.RADIUS_CONFIG_CHECK],
+                                env=env, capture_output=True, text=True, check=True)
+        output = json.loads(result.stdout)
+        self.assertEqual(output.pop('args'), ['-C', '-l', 'stdout'])
+        return output
+
+    def test_missing_test_secret_uses_startup_default(self):
+        self.assertEqual(self.check(RADIUS_CLIENT_SECRET='configured-ap'),
+                         {'ap': 'configured-ap', 'test': 'testing123'})
+
+    def test_empty_values_use_startup_defaults(self):
+        self.assertEqual(self.check(RADIUS_CLIENT_SECRET='', RADIUS_TEST_SECRET=''),
+                         {'ap': 'CHANGE_ME', 'test': 'testing123'})
+
+    def test_configured_secrets_are_preserved_as_data(self):
+        test_secret = 'spaces "quotes" $variable $(false) `false`'
+        self.assertEqual(self.check(RADIUS_CLIENT_SECRET='configured-ap', RADIUS_TEST_SECRET=test_secret),
+                         {'ap': 'configured-ap', 'test': test_secret})
 
 
 class CertificateTests(unittest.TestCase):
@@ -131,7 +195,7 @@ class PublishTests(unittest.TestCase):
         with patch.object(renew, 'compose') as compose, patch.object(renew, 'wait_healthy') as healthy:
             self.assertTrue(renew.publish(self.stage, self.live, self.state))
         calls = [call.args for call in compose.call_args_list]
-        self.assertEqual(calls[1], ('exec', '-T', 'freeradius', 'freeradius', '-C'))
+        self.assertEqual(calls[1], ('exec', '-T', 'freeradius', 'sh', '-ec', renew.RADIUS_CONFIG_CHECK))
         self.assertEqual(calls[2][-2:], ('restart', 'freeradius'))
         healthy.assert_called_once()
         for name in renew.CERT_FILES:

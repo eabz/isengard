@@ -9,6 +9,7 @@ import fcntl
 import os
 from pathlib import Path
 import re
+import shlex
 import signal
 import stat
 import subprocess
@@ -19,6 +20,15 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 CERT_FILES = ('server.key', 'server.pem', 'ca.pem')
 SUPERVISOR = ['supervisorctl', '-c', '/etc/supervisor/radius.conf']
+# docker exec inherits the container's initial environment, not the defaults
+# exported later by docker-entrypoint.sh. Match those defaults for validation
+# while preserving any configured values. This also works with existing images.
+RADIUS_CONFIG_CHECK = '''\
+: "${RADIUS_CLIENT_SECRET:=CHANGE_ME}"
+: "${RADIUS_TEST_SECRET:=testing123}"
+export RADIUS_CLIENT_SECRET RADIUS_TEST_SECRET
+exec freeradius -C -l stdout
+'''
 
 
 def interrupted(signum, frame):
@@ -27,13 +37,15 @@ def interrupted(signum, frame):
 
 
 def run(args, *, allowed=(0,), timeout=120):
-    result = subprocess.run([str(arg) for arg in args], capture_output=True, text=True, timeout=timeout)
+    command = [str(arg) for arg in args]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
     if result.returncode not in allowed:
-        detail = (result.stdout + result.stderr)[-6000:]
+        detail = (result.stdout + result.stderr).strip()[-6000:] or '(no output on stdout/stderr)'
+        message = f'Command failed (exit {result.returncode}): {shlex.join(command)}\n{detail}'
         for name in ('CF_Token', 'CF_Key'):
             if os.environ.get(name):
-                detail = detail.replace(os.environ[name], '[REDACTED]')
-        raise RuntimeError(f'{args[0]} failed (exit {result.returncode}):\n{detail}')
+                message = message.replace(os.environ[name], '[REDACTED]')
+        raise RuntimeError(message)
     return result
 
 
@@ -134,7 +146,8 @@ def publish(stage, live, state, install_only=False):
             # Check the new bundle/config while the current daemon continues
             # with its loaded certificate. Restart only RADIUS; stunnel and
             # the persistent TLS cache remain available.
-            compose('exec', '-T', 'freeradius', 'freeradius', '-C')
+            print('Validating FreeRADIUS configuration before restarting...', flush=True)
+            compose('exec', '-T', 'freeradius', 'sh', '-ec', RADIUS_CONFIG_CHECK)
             restarted = True
             compose('exec', '-T', 'freeradius', *SUPERVISOR, 'restart', 'freeradius')
             wait_healthy()
